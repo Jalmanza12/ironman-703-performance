@@ -1,0 +1,13 @@
+{
+  "name": "ironman-703-performance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal IRONMAN 70.3 Dallas–Little Elm (Mar 14, 2027) training & performance system — dependency-free static site.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "serve": "python3 -m http.server 8080",
+    "plan:export": "node scripts/export-plan.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
