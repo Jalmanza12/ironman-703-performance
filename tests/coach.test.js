@@ -1,253 +1,318 @@
+// AI Coach tests. The model is replaced by a SCRIPTED fake (tests only) so we can verify the
+// plumbing deterministically: what the model receives, that tools return real plan data,
+// transcript continuity across turns, proposal handling, approval, and error behavior.
+// These do not prove the live model's quality — see docs/ai-coach.md for live verification.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPlan } from '../js/plan/generator.js';
-import { emptyState, migrate } from '../js/store/store.js';
-import { effectiveSession, effectiveSessionsOn, validateProposal, applyProposal, undoChange, canUndo, fingerprint, affectedIds } from '../js/lib/adjustments.js';
-import { classifyIntent, detectRedFlags, resolveDate, resolveRange, planOffline } from '../js/lib/coachRules.js';
-import { buildCoachContext, toCoachMessage, supersedePending, activeProposal, callCoachAPI, CoachError, transcript } from '../js/lib/coachCore.js';
+import { emptyState } from '../js/store/store.js';
+import { currentBenchmarks } from '../js/lib/benchmarks.js';
+import { effectiveSession, validateProposal, applyProposal, fingerprint, affectedIds, undoChange, canUndo } from '../js/lib/adjustments.js';
+import { executeTool, buildSnapshot } from '../js/lib/coachTools.js';
+import { runTurn, ensureCoachState, newConversation, pendingProposalMessage, MAX_TRANSCRIPT_CHARS } from '../js/lib/coachAgent.js';
+import { callCoachAPI, CoachError } from '../js/lib/coachCore.js';
+import { detectRedFlags } from '../js/lib/coachSafety.js';
 import { aggregate } from '../js/lib/load.js';
-import { dayOfWeek } from '../js/lib/dates.js';
 
 const plan = buildPlan();
-const fresh = () => emptyState();
-const on = (date, sport) => plan.byDate[date].sessions.find((s) => s.sport === sport && (!sport || true));
-const ctxFor = (state, today) => ({ plan, state, today, bm: {}, coaching: [] });
+const TODAY = '2026-10-09'; // Friday — matches the athlete's live test
+const conn = { endpoint: 'https://coach.test', accessCode: 'code' };
 
-// Week 4: Mon Nov 2 – Sun Nov 8 2026. Wed Nov 4 = CSS swim (key) + easy run (supporting).
-const MON = '2026-11-02';
-const WED = '2026-11-04';
-const wedRun = plan.byDate[WED].sessions.find((s) => s.sport === 'run');
+function harness(today = TODAY) {
+  let st = emptyState();
+  ensureCoachState(st);
+  const store = {
+    load: () => JSON.parse(JSON.stringify(st)),
+    save: (s) => { st = JSON.parse(JSON.stringify(s)); },
+    get: () => st,
+  };
+  const getCtx = () => {
+    const state = store.load();
+    return { plan, state, today, bm: currentBenchmarks(state).values, coaching: [] };
+  };
+  return { store, getCtx, today };
+}
 
-test('request classification', () => {
-  assert.ok(classifyIntent("I can't train tomorrow because I have work").includes('skip'));
-  assert.ok(classifyIntent("I missed today's bike workout. What should I do?").includes('missed'));
-  assert.ok(classifyIntent('I only have 45 minutes to train today.').includes('shorten'));
-  assert.ok(classifyIntent('Can I move my long run to Saturday?').includes('reschedule'));
-  assert.ok(classifyIntent('I feel exhausted. Should I take a rest day?').includes('recovery'));
-  assert.ok(classifyIntent('I have a work trip next week and can only train three days.').includes('weekly'));
-  assert.ok(classifyIntent('My legs are sore after yesterday\'s brick workout.').includes('recovery'));
-  assert.ok(classifyIntent('I want to prioritize improving my bike performance.').includes('priority'));
-  assert.ok(classifyIntent('I can no longer train on Fridays, but I am available on Monday evenings.').includes('availability'));
-  assert.deepEqual(classifyIntent('What is CSS?'), ['question']);
-  assert.ok(classifyIntent('I had chest pain on my run').includes('safety'));
-});
+/** Scripted model: each entry is a function(requestBody) → { stopReason, content }. Records requests. */
+function scriptedModel(steps) {
+  const requests = [];
+  let i = 0;
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    const step = steps[i++];
+    if (!step) throw new Error('script exhausted');
+    const out = step(body);
+    if (out.httpStatus) return { status: out.httpStatus, ok: false, json: async () => out.body };
+    return { status: 200, ok: true, json: async () => ({ mode: 'ai', model: 'claude-opus-5-5', ...out }) };
+  };
+  return { fetchImpl, requests };
+}
+const think = (t) => ({ type: 'thinking', thinking: '', signature: `sig-${t}` });
+const text = (t) => ({ type: 'text', text: t });
+const toolUse = (id, name, input) => ({ type: 'tool_use', id, name, input });
+const lastToolResult = (body, id) => JSON.parse(body.messages.at(-1).content.find((b) => b.tool_use_id === id).content);
+const turnOpts = (h, fetchImpl) => ({ conn, timeZone: 'America/Chicago', getCtx: h.getCtx, loadState: h.store.load, saveState: h.store.save, fetchImpl });
 
-test('local-date resolution (never UTC)', () => {
-  assert.equal(resolveDate('tomorrow', '2026-11-03').date, '2026-11-04');
-  assert.equal(resolveDate('yesterday', '2026-11-01').date, '2026-10-31');
-  assert.equal(resolveDate('on Friday', '2026-11-02').date, '2026-11-06');
-  assert.equal(resolveDate('next Friday', '2026-11-02').date, '2026-11-13');
-  assert.equal(resolveDate('I missed Monday', '2026-11-04', { preferPast: true }).date, '2026-11-02');
-  assert.equal(resolveDate('Mar 14', '2027-01-10').date, '2027-03-14');
-  assert.ok(resolveDate('Wednesday', '2026-11-04').ambiguousToday);
-  const r = resolveRange('I am traveling Monday through Wednesday next week', '2026-11-04');
-  assert.deepEqual([r.start, r.end], ['2026-11-09', '2026-11-11']);
-});
+// Oct 10 2026 (Sat, Week 0): mobility (optional) + easy recovery swim (optional)
+const oct10 = plan.byDate['2026-10-10'].sessions;
 
-test('effective plan: overrides never mutate the generated plan; completed history is preserved', () => {
-  const st = fresh();
-  const before = JSON.stringify(plan.sessions[wedRun.id]);
-  const res = applyProposal(plan, st, { summary: 's', changes: [{ action: 'shorten', workoutId: wedRun.id, newDurationMin: 20, reason: 'r' }] }, { today: MON });
-  assert.ok(res.ok);
-  assert.equal(JSON.stringify(plan.sessions[wedRun.id]), before);
-  assert.equal(effectiveSession(plan, res.state, wedRun.id).durationMin, 20);
-  assert.deepEqual(res.state.logs, {}); // nothing marked completed
-  // completed sessions cannot be changed
-  const st2 = fresh();
-  st2.logs[wedRun.id] = { status: 'completed', actual: { durationMin: 30 } };
-  const v = validateProposal(plan, st2, { changes: [{ action: 'skip', workoutId: wedRun.id }] }, { today: MON });
-  assert.equal(v.ok, false);
-  assert.match(v.errors[0], /already logged as completed/);
-});
-
-test('scenario: "I cannot run Wednesday. Can you adjust my plan?" — reads the week, protects demanding days, applies only on approval', () => {
-  const st = fresh();
-  const ctx = ctxFor(st, MON);
-  // reads the correct week
-  const c = buildCoachContext(ctx);
-  assert.ok(c.sessions.some((s) => s.id === wedRun.id));
-  assert.ok(c.sessions.some((s) => s.date === '2026-11-07' && s.intensity === 'long')); // weekend long ride visible
-  const reply = planOffline('I cannot run Wednesday. Can you adjust my plan?', ctx);
-  assert.ok(reply.proposal, reply.message);
-  assert.equal(reply.proposal.changes.length, 1);
-  const ch = reply.proposal.changes[0];
-  assert.equal(ch.workoutId, wedRun.id);
-  if (ch.action === 'move') {
-    // never onto a day that already has a demanding bike/run session or the Monday rest day
-    const target = effectiveSessionsOn(plan, st, ch.newDate);
-    assert.ok(!target.some((s) => ['bike', 'run'].includes(s.sport) && ['hard', 'long', 'test'].includes(s.intensity)), ch.newDate);
-    assert.notEqual(dayOfWeek(ch.newDate), 1);
-  } else assert.equal(ch.action, 'skip');
-  assert.ok(ch.reason.length > 10);
-  const msg = toCoachMessage(reply, ctx, { mode: 'rules', id: 'm1' });
-  assert.equal(msg.proposalStatus, 'pending');
-  // original plan unchanged until acceptance
-  assert.deepEqual(st.reschedules, {});
-  assert.deepEqual(st.overrides, {});
-  // accept → applies only the validated change
-  const res = applyProposal(plan, st, msg.proposal, { today: MON, source: 'rules' });
-  assert.ok(res.ok);
-  assert.deepEqual(Object.keys({ ...res.state.reschedules, ...res.state.overrides }), [wedRun.id]);
-  assert.equal(res.state.changeHistory.length, 1);
-  assert.deepEqual(res.state.logs, {});
-  // reject path: state untouched
-  const st3 = fresh();
-  const m2 = toCoachMessage(reply, ctxFor(st3, MON), { mode: 'rules', id: 'm2' });
-  m2.proposalStatus = 'rejected';
-  assert.deepEqual(st3.reschedules, {});
-  assert.deepEqual(st3.overrides, {});
-});
-
-test('follow-up memory: "can\'t run tomorrow" → move-or-skip question → "move it to Friday" → "actually only 25 minutes Friday"', () => {
-  const st = fresh();
-  const tue = '2026-11-03';
-  const ctx = ctxFor(st, tue);
-  const q = planOffline("I can't run tomorrow", ctx);
-  assert.equal(q.proposal, null);
-  assert.equal(q.pending.type, 'move_or_skip');
-  assert.deepEqual(q.pending.workoutIds, [wedRun.id]);
-  const p1 = planOffline('Move it to Friday', ctx, { pending: q.pending });
-  assert.equal(p1.proposal.changes[0].action, 'move');
-  assert.equal(p1.proposal.changes[0].newDate, '2026-11-06');
-  const p2 = planOffline('Actually, I only have 25 minutes Friday', ctx, { activeProposal: p1.proposal });
-  assert.equal(p2.proposal.changes[0].newDate, '2026-11-06');
-  assert.equal(p2.proposal.changes[0].newDurationMin, 25);
-  // modifying a proposal supersedes the earlier one (edge 11 + 18)
-  const msgs = [toCoachMessage(p1, ctx, { mode: 'rules', id: 'a' })];
-  supersedePending(msgs);
-  msgs.push(toCoachMessage(p2, ctx, { mode: 'rules', id: 'b' }));
-  assert.equal(msgs[0].proposalStatus, 'superseded');
-  assert.equal(activeProposal(msgs).id, 'p-b');
-});
-
-test('multi-day travel: keeps key sessions where they fit, skips the rest, never compresses', () => {
-  const st = fresh();
-  const today = '2026-11-04';
-  const reply = planOffline('I am traveling Monday through Wednesday next week. I can only train Thursday, Friday, Saturday, and Sunday.', ctxFor(st, today));
-  assert.ok(reply.proposal);
-  const changes = reply.proposal.changes;
-  const affected = ['2026-11-09', '2026-11-10', '2026-11-11'].flatMap((d) => plan.byDate[d].sessions).filter((s) => s.sport !== 'rest');
-  assert.equal(changes.length, affected.length);
-  assert.ok(changes.some((c) => c.action === 'skip'));
-  for (const c of changes.filter((x) => x.action === 'move')) assert.ok(c.newDate >= '2026-11-12' && c.newDate <= '2026-11-15');
-  const v = validateProposal(plan, st, reply.proposal, { today });
-  assert.ok(v.ok, v.errors.join('; '));
-});
-
-test('edge cases: empty message, safety, pain, no plan, no upcoming workouts', async () => {
-  // 1 empty message: the UI guard returns before anything is stored
-  const coach = await import('../js/ui/coach.js');
-  const { load } = await import('../js/store/store.js');
-  const n = load().coach.messages.length;
-  await coach.send('   ', () => {}, null);
-  assert.equal(load().coach.messages.length, n);
-  // 16 serious symptoms → urgent, no proposal
-  const st = fresh();
-  const r = planOffline('I felt chest pain and almost fainted on my ride', ctxFor(st, MON));
-  assert.equal(r.safetyLevel, 'urgent');
-  assert.equal(r.proposal, null);
+test('safety detector', () => {
+  assert.ok(detectRedFlags('I had chest pain on my run').length);
   assert.ok(detectRedFlags('my heart is racing at rest').length);
-  const urgentAi = toCoachMessage({ message: 'x', safetyLevel: 'urgent', proposal: { summary: 's', changes: [{ action: 'skip', workoutId: wedRun.id }] } }, ctxFor(st, MON), { mode: 'ai' });
-  assert.equal(urgentAi.proposal, undefined);
-  // localized pain → caution + low-impact replacement, plus advice
-  const p = planOffline('My shin hurts when I run', ctxFor(st, MON));
-  assert.equal(p.safetyLevel, 'caution');
-  assert.match(p.message, /sports-medicine|physiotherapist/);
-  // 4 no plan for the date (before plan window) & 5 no upcoming workouts (after race)
-  assert.doesNotThrow(() => buildCoachContext(ctxFor(st, '2026-09-01')));
-  const after = planOffline("I can't train tomorrow", ctxFor(st, '2027-03-20'));
-  assert.equal(after.proposal, null);
+  assert.equal(detectRedFlags('my legs are sore').length, 0);
 });
 
-test('edge cases: completed workout, conflicting date, excessive load, unknown id, partial failure', () => {
-  const st = fresh();
-  // 6 skip a completed workout
-  st.logs[wedRun.id] = { status: 'completed', actual: {} };
-  const done = planOffline('I need to skip my run on Wednesday', ctxFor(st, MON));
-  assert.match(done.message, /already logged as completed/);
-  delete st.logs[wedRun.id];
-  // 7 conflicting date: move Tuesday's bike intervals onto Thursday's hard run day
+test('missing configuration → clear error, nothing fabricated', async () => {
+  const h = harness();
+  await assert.rejects(runTurn('What do I have tomorrow?', { ...turnOpts(h, null), conn: { endpoint: '' } }), (e) => e instanceof CoachError && e.kind === 'not_configured');
+  assert.equal(h.store.get().coach.messages.length, 0);
+  // Backend deployed without API key → 503 not_configured → athlete message + error notice, no coach reply, transcript untouched
+  const m = scriptedModel([() => ({ httpStatus: 503, body: { error: 'The AI Coach backend is deployed but ANTHROPIC_API_KEY is not set.', code: 'not_configured' } })]);
+  await assert.rejects(runTurn('Hello', turnOpts(h, m.fetchImpl)), (e) => e.kind === 'not_configured');
+  const c = h.store.get().coach;
+  assert.deepEqual(c.messages.map((x) => x.role), ['athlete', 'notice']);
+  assert.match(c.messages[1].text, /ANTHROPIC_API_KEY/);
+  assert.equal(c.messages.some((x) => x.role === 'coach'), false);
+  assert.deepEqual(c.apiMessages, []);
+  // empty message
+  await assert.rejects(runTurn('   ', turnOpts(h, m.fetchImpl)), (e) => e.kind === 'empty');
+});
+
+test('the model receives the actual message, local date and real schedule snapshot', async () => {
+  const h = harness();
+  const m = scriptedModel([() => ({ stopReason: 'end_turn', content: [think('a'), text('Tomorrow you have mobility and an easy swim.')] })]);
+  await runTurn('What session do I have tomorrow?', turnOpts(h, m.fetchImpl));
+  const req = m.requests[0];
+  assert.equal(req.localDate, TODAY);
+  assert.equal(req.timeZone, 'America/Chicago');
+  const user = req.messages.at(-1);
+  assert.equal(user.role, 'user');
+  assert.equal(user.content[1].text, 'What session do I have tomorrow?');
+  const snap = user.content[0].text;
+  assert.match(snap, /Friday 2026-10-09 \(today\)/);
+  assert.match(snap, /Saturday 2026-10-10 \(tomorrow\)/);
+  for (const s of oct10) assert.ok(snap.includes(`[${s.id}]`), `snapshot lists ${s.id}`);
+  const coach = h.store.get().coach.messages.at(-1);
+  assert.equal(coach.role, 'coach');
+  assert.equal(coach.mode, 'ai');
+});
+
+test('Tests A–F: date-specific requests, follow-ups, revised proposal, explanation — one continuous conversation', async () => {
+  const h = harness();
+  const swim = oct10.find((s) => s.sport === 'swim');
+  const steps = [
+    // A: "Change plan on October 10, 2026." → model checks the date, asks what to change
+    () => ({ stopReason: 'tool_use', content: [think('A1'), toolUse('t1', 'get_schedule', { start_date: '2026-10-10', end_date: '2026-10-10' })] }),
+    (body) => {
+      const r = lastToolResult(body, 't1');
+      assert.deepEqual(r.sessions.map((s) => s.id).sort(), oct10.map((s) => s.id).sort()); // real data
+      return { stopReason: 'end_turn', content: [think('A2'), text('On Saturday Oct 10 you have Mobility & tissue care (20 min) and an Easy recovery swim. What would you like to change?')] };
+    },
+    // B: "replace October 10, session" → two sessions → asks which one
+    () => ({ stopReason: 'end_turn', content: [think('B'), text('There are two sessions that day — the mobility routine or the easy swim. Which one, and what would you like instead?')] }),
+    // C: "I can't train tomorrow because of work." → looks at the week, asks move or skip
+    () => ({ stopReason: 'tool_use', content: [think('C1'), toolUse('t2', 'get_weekly_schedule', { date: '2026-10-10' })] }),
+    (body) => {
+      const r = lastToolResult(body, 't2');
+      assert.equal(r.week, 0);
+      assert.ok(r.days.some((d) => d.date === '2026-10-11'));
+      return { stopReason: 'end_turn', content: [think('C2'), text('No problem. Tomorrow (Sat Oct 10) has mobility and an easy swim. Would you like to move them or skip them?')] };
+    },
+    // D: "Move it to Sunday." → proposes moving the swim to Sunday Oct 11
+    () => ({ stopReason: 'tool_use', content: [think('D1'), toolUse('t3', 'propose_reschedule_workout', { workout_id: swim.id, new_date: '2026-10-11', new_duration_min: null, reason: 'Sunday has only an easy spin, so an easy swim fits.' })] }),
+    (body) => {
+      const r = lastToolResult(body, 't3');
+      assert.equal(r.status, 'pending_athlete_approval');
+      return { stopReason: 'end_turn', content: [think('D2'), text('I\'ve proposed moving the easy swim to Sunday Oct 11 — accept it below if that works.')] };
+    },
+    // E: "Actually, I think I should skip it instead." → replaces the pending proposal
+    () => ({ stopReason: 'tool_use', content: [think('E1'), toolUse('t4', 'propose_skip_workout', { workout_id: swim.id, reason: 'It\'s an optional recovery swim; skipping costs nothing this week.' })] }),
+    () => ({ stopReason: 'end_turn', content: [think('E2'), text('Updated: I now propose skipping the swim instead of moving it.')] }),
+    // F: "Why are you recommending that?" → conversational answer, no tools
+    () => ({ stopReason: 'end_turn', content: [think('F'), text('Because this is your post-Waco recovery week: the swim is optional and easy, so skipping it protects recovery without losing fitness.')] }),
+  ];
+  const m = scriptedModel(steps);
+  const o = turnOpts(h, m.fetchImpl);
+
+  await runTurn('Change plan on October 10, 2026.', o);
+  await runTurn('replace October 10, session', o);
+  await runTurn("I can't train tomorrow because of work.", o);
+  await runTurn('Move it to Sunday.', o);
+  let c = h.store.get().coach;
+  const firstProposal = pendingProposalMessage(c.messages);
+  assert.equal(firstProposal.proposal.changes[0].action, 'move');
+  assert.equal(firstProposal.proposal.changes[0].newDate, '2026-10-11');
+  assert.deepEqual(h.store.get().reschedules, {}); // not applied without approval
+
+  await runTurn('Actually, I think I should skip it instead.', o);
+  c = h.store.get().coach;
+  const pend = c.messages.filter((x) => x.proposalStatus === 'pending');
+  assert.equal(pend.length, 1); // no duplicate proposals
+  assert.equal(pend[0].proposal.changes[0].action, 'skip');
+  assert.equal(c.messages.find((x) => x.id === firstProposal.id).proposalStatus, 'superseded');
+
+  await runTurn('Why are you recommending that?', o);
+
+  // Continuity: every request is the previous transcript + new turns, byte-identical (append-only)
+  for (let i = 1; i < m.requests.length; i += 1) {
+    const prev = m.requests[i - 1].messages;
+    const cur = m.requests[i].messages;
+    assert.deepEqual(cur.slice(0, prev.length), prev, `request ${i} must replay request ${i - 1} verbatim`);
+  }
+  // Thinking blocks are replayed unchanged
+  const finalReq = m.requests.at(-1);
+  assert.ok(finalReq.messages.some((x) => x.role === 'assistant' && x.content.some((b) => b.type === 'thinking' && b.signature === 'sig-A1')));
+  // The last request carries the athlete's actual words, and the pending proposal in the snapshot
+  assert.equal(finalReq.messages.at(-1).content[1].text, 'Why are you recommending that?');
+  assert.match(finalReq.messages.at(-1).content[0].text, /Pending proposal: .*Skip/);
+  // No welcome/generic text was ever produced by the app
+  assert.equal(h.store.get().coach.messages.filter((x) => x.role === 'coach').length, 6);
+});
+
+test('approval workflow: accept applies validated change + informs the model next turn; reject leaves plan unchanged', async () => {
+  const coachUI = await import('../js/ui/coach.js');
+  const store = await import('../js/store/store.js');
+  const swim = oct10.find((s) => s.sport === 'swim');
+  // Seed the real app store with a pending AI proposal
+  const st = emptyState();
+  ensureCoachState(st);
+  const proposal = { id: 'p1', source: 'ai', summary: 'Skip easy swim', changes: [{ action: 'skip', workoutId: swim.id, reason: 'r' }], today: TODAY };
+  proposal.fingerprint = fingerprint(st, affectedIds(proposal));
+  st.coach.messages.push({ id: 'm1', role: 'coach', mode: 'ai', text: 'x', proposal, proposalStatus: 'pending', validation: validateProposal(plan, st, proposal, { today: TODAY }) });
+  store.save(st);
+  const r = coachUI.acceptProposal('m1', { today: TODAY, plan });
+  assert.ok(r.ok);
+  const after = store.load();
+  assert.equal(effectiveSession(plan, after, swim.id).cancelled, true);
+  assert.deepEqual(after.logs, {}); // never marked completed
+  assert.match(after.coach.events[0], /ACCEPTED/);
+  // reject path
+  const st2 = emptyState();
+  ensureCoachState(st2);
+  st2.coach.messages.push({ id: 'm2', role: 'coach', mode: 'ai', text: 'x', proposal: { ...proposal, id: 'p2' }, proposalStatus: 'pending' });
+  store.save(st2);
+  assert.ok(coachUI.rejectProposal('m2'));
+  const after2 = store.load();
+  assert.deepEqual(after2.overrides, {});
+  assert.match(after2.coach.events[0], /REJECTED/);
+});
+
+test('tools use real data and validation; invalid proposals are not shown', () => {
+  const h = harness('2026-11-02');
+  const ctx = h.getCtx();
+  const wed = plan.byDate['2026-11-04'].sessions;
+  const wedRun = wed.find((s) => s.sport === 'run');
   const tueBike = plan.byDate['2026-11-03'].sessions.find((s) => s.sport === 'bike');
-  const v7 = validateProposal(plan, st, { changes: [{ action: 'move', workoutId: tueBike.id, newDate: '2026-11-05' }] }, { today: MON });
-  assert.equal(v7.ok, false);
-  assert.match(v7.errors.join(' '), /stacking/);
-  // 8 excessive load: cram last week's long ride into this week
-  const satW5 = plan.byDate['2026-11-14'].sessions.find((s) => s.intensity === 'long');
-  const v8 = validateProposal(plan, st, { changes: [{ action: 'move', workoutId: satW5.id, newDate: '2026-11-18' }] }, { today: '2026-11-09' });
-  assert.equal(v8.ok, false);
-  assert.match(v8.errors.join(' '), /more training load/);
-  // 12 unknown workout id
-  const v12 = validateProposal(plan, st, { changes: [{ action: 'skip', workoutId: '2026-11-04#9' }] }, { today: MON });
-  assert.equal(v12.ok, false);
-  assert.match(v12.errors[0], /does not exist/);
-  // 15 multi-change proposal with one invalid change → nothing applied
-  const bad = { summary: 'x', changes: [{ action: 'skip', workoutId: wedRun.id, reason: 'ok' }, { action: 'move', workoutId: tueBike.id, newDate: '2026-11-05', reason: 'bad' }] };
-  const res = applyProposal(plan, st, bad, { today: MON });
-  assert.equal(res.ok, false);
-  assert.deepEqual(st.overrides, {});
-  assert.deepEqual(st.reschedules, {});
+  const week = executeTool('get_weekly_schedule', { date: '2026-11-04' }, ctx);
+  assert.equal(week.week, 4);
+  assert.ok(week.days.some((d) => d.id === wedRun.id));
+  const det = executeTool('get_workout_details', { workout_id: wedRun.id }, ctx);
+  assert.equal(det.id, wedRun.id);
+  assert.ok(det.main_set.length);
+  assert.match(executeTool('get_workout_details', { workout_id: '2099-01-01#0' }, ctx).error, /No workout/);
+  assert.match(executeTool('get_schedule', { start_date: '2026-11-01', end_date: '2026-12-31' }, ctx).error, /Range too long/);
+  // conflicting move (stacking demanding sessions) is rejected and NOT registered as pending
+  const turn = {};
+  const bad = executeTool('propose_reschedule_workout', { workout_id: tueBike.id, new_date: '2026-11-05', new_duration_min: null, reason: 'x' }, ctx, turn);
+  assert.equal(bad.status, 'rejected_by_validator');
+  assert.match(bad.errors.join(' '), /stacking/);
+  assert.equal(turn.proposal, undefined);
+  // valid move of the Wednesday easy run to Friday
+  const ok = executeTool('propose_reschedule_workout', { workout_id: wedRun.id, new_date: '2026-11-06', new_duration_min: null, reason: 'Light day' }, ctx, turn);
+  assert.equal(ok.status, 'pending_athlete_approval');
+  assert.equal(turn.proposal.proposal.changes[0].workoutId, wedRun.id);
+  // completed workouts cannot be changed
+  const h2 = harness('2026-11-02');
+  const s2 = h2.store.load();
+  s2.logs[wedRun.id] = { status: 'completed', actual: {} };
+  h2.store.save(s2);
+  const done = executeTool('propose_skip_workout', { workout_id: wedRun.id, reason: 'x' }, h2.getCtx(), {});
+  assert.equal(done.status, 'rejected_by_validator');
+  // recent training reports missing check-ins honestly
+  assert.match(String(executeTool('get_recent_training', { days: 7 }, ctx).checkins), /No daily check-ins/);
 });
 
-test('edge cases: plan changed while pending, date rollover, overlapping proposals, undo', () => {
-  const st = fresh();
-  const p = { summary: 'skip run', changes: [{ action: 'skip', workoutId: wedRun.id, reason: 'r' }], today: MON };
+test('withdraw, new conversation, compaction, step limit, failure rollback', async () => {
+  const h = harness();
+  const swim = oct10.find((s) => s.sport === 'swim');
+  const m = scriptedModel([
+    () => ({ stopReason: 'tool_use', content: [toolUse('a', 'propose_skip_workout', { workout_id: swim.id, reason: 'r' })] }),
+    () => ({ stopReason: 'end_turn', content: [text('Proposed.')] }),
+    () => ({ stopReason: 'tool_use', content: [toolUse('b', 'withdraw_pending_proposal', { reason: 'athlete changed mind' })] }),
+    () => ({ stopReason: 'end_turn', content: [text('Okay, keeping it as planned.')] }),
+  ]);
+  await runTurn('skip tomorrow\'s swim', turnOpts(h, m.fetchImpl));
+  await runTurn('never mind, keep it', turnOpts(h, m.fetchImpl));
+  assert.equal(pendingProposalMessage(h.store.get().coach.messages), null);
+  assert.equal(h.store.get().coach.messages.find((x) => x.proposal).proposalStatus, 'withdrawn');
+  // new conversation inherits nothing
+  const fresh = newConversation(h.store.load());
+  assert.deepEqual([fresh.coach.messages.length, fresh.coach.apiMessages.length], [0, 0]);
+  // compaction: oversized transcript restarts with a plain-text recap (no old thinking blocks)
+  const s = h.store.load();
+  s.coach.apiMessages = [{ role: 'user', content: 'x'.repeat(MAX_TRANSCRIPT_CHARS + 10) }, { role: 'assistant', content: [think('old'), text('old')] }];
+  h.store.save(s);
+  const m2 = scriptedModel([() => ({ stopReason: 'end_turn', content: [text('hi')] })]);
+  await runTurn('hello again', turnOpts(h, m2.fetchImpl));
+  assert.equal(m2.requests[0].messages.length, 1);
+  assert.match(m2.requests[0].messages[0].content[0].text, /conversation_recap/);
+  // step limit: a model that never stops calling tools is cut off safely
+  const loop = scriptedModel(Array.from({ length: 10 }, (_, i) => () => ({ stopReason: 'tool_use', content: [toolUse(`l${i}`, 'get_athlete_profile', {})] })));
+  const r = await runTurn('loop', turnOpts(h, loop.fetchImpl));
+  assert.ok(r.steps <= 8);
+  const tr = h.store.get().coach.apiMessages;
+  assert.equal(tr.at(-1).role, 'user'); // every tool_use has its tool_result
+  // failure mid-turn rolls the transcript back
+  const before = JSON.stringify(h.store.get().coach.apiMessages);
+  const fail = scriptedModel([() => ({ stopReason: 'tool_use', content: [toolUse('f', 'get_athlete_profile', {})] }), () => ({ httpStatus: 504, body: { error: 'timed out', code: 'timeout' } })]);
+  await assert.rejects(runTurn('this will time out', turnOpts(h, fail.fetchImpl)), (e) => e.kind === 'timeout');
+  assert.equal(JSON.stringify(h.store.get().coach.apiMessages), before);
+  assert.ok(h.store.get().coach.messages.at(-1).retryText);
+});
+
+test('client API errors are typed', async () => {
+  const resp = (status, body) => () => Promise.resolve({ status, ok: status < 400, json: () => Promise.resolve(body) });
+  const args = { endpoint: 'https://x.dev', messages: [{ role: 'user', content: 'hi' }] };
+  await assert.rejects(callCoachAPI({ ...args, endpoint: '' }), (e) => e.kind === 'not_configured');
+  await assert.rejects(callCoachAPI(args, { fetchImpl: () => Promise.reject(new TypeError('x')) }), (e) => e.kind === 'network');
+  await assert.rejects(callCoachAPI(args, { timeoutMs: 5, fetchImpl: () => new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('a'), { name: 'AbortError' })), 20)) }), (e) => e.kind === 'timeout');
+  await assert.rejects(callCoachAPI(args, { fetchImpl: resp(401, { error: 'no' }) }), (e) => e.kind === 'unauthorized');
+  await assert.rejects(callCoachAPI(args, { fetchImpl: resp(200, { message: 'old format' }) }), (e) => e.kind === 'malformed');
+});
+
+// ---- adjustment engine (unchanged behavior, still enforced for AI proposals) ----
+test('adjustments: conflicts, load guard, stale proposals, undo, planned vs actual', () => {
+  const st = emptyState();
+  const wedRun = plan.byDate['2026-11-04'].sessions.find((s) => s.sport === 'run');
+  const tueBike = plan.byDate['2026-11-03'].sessions.find((s) => s.sport === 'bike');
+  assert.match(validateProposal(plan, st, { changes: [{ action: 'move', workoutId: tueBike.id, newDate: '2026-11-05' }] }, { today: '2026-11-02' }).errors.join(' '), /stacking/);
+  const satW5 = plan.byDate['2026-11-14'].sessions.find((s) => s.intensity === 'long');
+  assert.match(validateProposal(plan, st, { changes: [{ action: 'move', workoutId: satW5.id, newDate: '2026-11-18' }] }, { today: '2026-11-09' }).errors.join(' '), /more training load/);
+  const p = { summary: 'm', changes: [{ action: 'move', workoutId: wedRun.id, newDate: '2026-11-06', reason: 'r' }], today: '2026-11-02' };
   p.fingerprint = fingerprint(st, affectedIds(p));
-  // 9 the athlete logs the session while the proposal is pending
   const changed = JSON.parse(JSON.stringify(st));
   changed.logs[wedRun.id] = { status: 'completed', actual: {} };
-  const r9 = applyProposal(plan, changed, p, { today: MON });
-  assert.equal(r9.ok, false);
-  assert.equal(r9.stale, true);
-  assert.equal(r9.validation.ok, false);
-  // 17 local date rolled over since the proposal (e.g., timezone/midnight) → re-validated first
-  const p17 = { summary: 'move', changes: [{ action: 'move', workoutId: wedRun.id, newDate: '2026-11-06', reason: 'r' }], today: MON };
-  p17.fingerprint = fingerprint(st, affectedIds(p17));
-  const r17 = applyProposal(plan, st, p17, { today: '2026-11-07' });
-  assert.equal(r17.stale, true);
-  assert.equal(r17.validation.ok, false); // Nov 6 is now in the past
-  // happy path + undo
-  const ok = applyProposal(plan, st, p17, { today: MON });
+  assert.equal(applyProposal(plan, changed, p, { today: '2026-11-02' }).stale, true);
+  const ok = applyProposal(plan, st, p, { today: '2026-11-02' });
   assert.ok(ok.ok);
-  assert.equal(effectiveSession(plan, ok.state, wedRun.id).date, '2026-11-06');
-  assert.ok(canUndo(ok.state, ok.state.changeHistory[0], { today: MON }).ok);
-  const u = undoChange(ok.state, ok.state.changeHistory[0].id, { today: MON });
-  assert.ok(u.ok);
-  assert.equal(effectiveSession(plan, u.state, wedRun.id).date, WED);
-  // undo blocked once the session is logged
-  ok.state.logs[wedRun.id] = { status: 'completed', actual: {} };
-  assert.equal(canUndo(ok.state, ok.state.changeHistory[0], { today: MON }).ok, false);
-});
-
-test('edge 13: conversation and pending proposal survive a reload (persisted state)', () => {
-  const st = fresh();
-  const reply = planOffline('Skip my run on Wednesday', ctxFor(st, MON));
-  const msg = toCoachMessage(reply, ctxFor(st, MON), { mode: 'rules', id: 'x' });
-  st.coach.messages.push({ role: 'athlete', id: 'q', text: 'Skip my run on Wednesday' }, msg);
-  const reloaded = migrate(JSON.parse(JSON.stringify(st)));
-  assert.equal(reloaded.coach.messages.length, 2);
-  assert.equal(activeProposal(reloaded.coach.messages).id, 'p-x');
-  assert.deepEqual(transcript(reloaded.coach.messages).map((t) => t.role), ['user', 'assistant']);
-});
-
-test('planned vs actual stay distinct after adjustments; history is not rewritten', () => {
-  const st = fresh();
+  assert.ok(canUndo(ok.state, ok.state.changeHistory[0], { today: '2026-11-02' }).ok);
+  assert.equal(effectiveSession(plan, undoChange(ok.state, ok.state.changeHistory[0].id, { today: '2026-11-02' }).state, wedRun.id).date, '2026-11-04');
   const w = plan.weeks[4];
-  st.logs[w.days[1].sessions[0].id] = { status: 'completed', actual: { durationMin: 60, rpe: 6 } };
-  const before = aggregate(w.days, st.logs, { plan, state: st });
-  const res = applyProposal(plan, st, { summary: 's', changes: [{ action: 'skip', workoutId: wedRun.id, reason: 'r' }] }, { today: MON });
-  const after = aggregate(w.days, res.state.logs, { plan, state: res.state });
-  assert.equal(after.planned.run, before.planned.run - wedRun.durationMin);
-  assert.deepEqual(after.actual, before.actual);
+  const a = aggregate(w.days, st.logs, { plan, state: st });
+  const b = aggregate(w.days, ok.state.logs, { plan, state: ok.state });
+  assert.equal(a.planned.total, b.planned.total);
+  assert.deepEqual(a.actual, b.actual);
+  // weekend swap is judged on the final schedule
+  const sat = plan.byDate['2026-11-07'].sessions;
+  const sun = plan.byDate['2026-11-08'].sessions;
+  const swap = { changes: [...sat.filter((s) => s.sport !== 'rest').map((s) => ({ action: 'move', workoutId: s.id, newDate: '2026-11-08' })), ...sun.map((s) => ({ action: 'move', workoutId: s.id, newDate: '2026-11-07' }))] };
+  assert.ok(validateProposal(plan, st, swap, { today: '2026-11-02' }).ok);
 });
 
-test('client API failures: not configured, timeout, network, unauthorized, malformed', async () => {
-  await assert.rejects(callCoachAPI({ endpoint: '', messages: [], context: {} }), (e) => e instanceof CoachError && e.kind === 'not_configured');
-  const hang = () => new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })), 30));
-  await assert.rejects(callCoachAPI({ endpoint: 'https://x.dev', messages: [], context: {} }, { timeoutMs: 10, fetchImpl: hang }), (e) => e.kind === 'timeout');
-  await assert.rejects(callCoachAPI({ endpoint: 'https://x.dev', messages: [], context: {} }, { fetchImpl: () => Promise.reject(new TypeError('fail')) }), (e) => e.kind === 'network');
-  const resp = (status, body) => () => Promise.resolve({ status, ok: status < 400, json: () => Promise.resolve(body) });
-  await assert.rejects(callCoachAPI({ endpoint: 'https://x.dev', messages: [], context: {} }, { fetchImpl: resp(401, { error: 'no' }) }), (e) => e.kind === 'unauthorized');
-  await assert.rejects(callCoachAPI({ endpoint: 'https://x.dev', messages: [], context: {} }, { fetchImpl: resp(200, { nope: 1 }) }), (e) => e.kind === 'malformed');
-  const ok = await callCoachAPI({ endpoint: 'https://x.dev', messages: [{ role: 'user', text: 'hi' }], context: {} }, { fetchImpl: resp(200, { message: 'hello', mode: 'ai' }) });
-  assert.equal(ok.message, 'hello');
+test('snapshot reports events and pending proposal', () => {
+  const h = harness();
+  const snap = buildSnapshot(h.getCtx(), { timeZone: 'America/Chicago', pending: { summary: 'Skip swim', changes: [] }, events: ['The athlete ACCEPTED the proposal "x".'] });
+  assert.match(snap, /Pending proposal: Skip swim/);
+  assert.match(snap, /Since your last reply: The athlete ACCEPTED/);
 });

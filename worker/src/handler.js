@@ -1,14 +1,18 @@
 // Request handling for the AI Coach Worker (SDK-free so it can be unit-tested).
-// createHandler({ callModel }) → fetch(request, env). `callModel(env, {system, messages})`
-// returns { stopReason, text, model } or throws an error with .status / .name.
+// Each POST /coach runs ONE model step: the browser sends the append-only transcript (including
+// prior tool calls/results), the Worker calls the model with the fixed system prompt + tools, and
+// returns the assistant content. When the model asks for tools, the browser runs them against the
+// athlete's real data and calls again with the results.
+// createHandler({ callModel }) → fetch(request, env). `callModel(env, { system, tools, messages })`
+// returns { stopReason, content, model, inputTransformations } or throws (.name / .status).
 
-import { validateRequest, validateOutput, buildMessages, SYSTEM_PROMPT } from './schema.js';
+import { validateRequest, sanitizeContent, SYSTEM_PROMPT, TOOLS } from './schema.js';
 
-export const MAX_BODY_BYTES = 64 * 1024;
-const RATE = { windowMs: 10 * 60 * 1000, max: 30 };
+export const MAX_BODY_BYTES = 512 * 1024;
+const RATE = { windowMs: 10 * 60 * 1000, max: 120 }; // model steps, not messages (tool loops use several)
 
 export function createHandler({ callModel, now = () => Date.now() }) {
-  const hits = new Map(); // best-effort per-isolate limiter (add a Cloudflare Rate Limiting binding for global limits)
+  const hits = new Map(); // best-effort per-isolate limiter; add a Rate Limiting binding for global limits
 
   function rateLimited(ip) {
     const t = now();
@@ -36,12 +40,12 @@ export function createHandler({ callModel, now = () => Date.now() }) {
     if (origin && !allowed.includes(origin)) return json(403, { error: 'Origin not allowed.' });
 
     if (request.method === 'GET' && url.pathname === '/health') {
-      return json(200, { ok: true, configured: !!env.ANTHROPIC_API_KEY, mock: !env.ANTHROPIC_API_KEY && env.MOCK_MODE === 'true', accessCodeRequired: !!env.COACH_ACCESS_CODE });
+      return json(200, { ok: true, configured: !!env.ANTHROPIC_API_KEY && !!env.COACH_ACCESS_CODE, apiKey: !!env.ANTHROPIC_API_KEY, accessCode: !!env.COACH_ACCESS_CODE, model: env.COACH_MODEL || 'claude-opus-5-5', mock: env.MOCK_MODE === 'true' });
     }
     if (request.method !== 'POST' || url.pathname !== '/coach') return json(404, { error: 'Not found.' });
 
-    if (!env.COACH_ACCESS_CODE) return json(503, { error: 'Server is missing COACH_ACCESS_CODE.', code: 'not_configured' });
-    if (!safeEqual(request.headers.get('X-Coach-Access') || '', env.COACH_ACCESS_CODE)) return json(401, { error: 'Access code rejected.' });
+    if (!env.COACH_ACCESS_CODE) return json(503, { error: 'The AI Coach backend is missing its COACH_ACCESS_CODE secret.', code: 'not_configured' });
+    if (!safeEqual(request.headers.get('X-Coach-Access') || '', env.COACH_ACCESS_CODE)) return json(401, { error: 'Access code rejected.', code: 'unauthorized' });
 
     const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
     if (rateLimited(ip)) return json(429, { error: 'Too many requests — try again in a few minutes.' });
@@ -50,15 +54,14 @@ export function createHandler({ callModel, now = () => Date.now() }) {
       if (!success) return json(429, { error: 'Too many requests — try again in a few minutes.' });
     }
 
-    const declared = Number(request.headers.get('Content-Length') || 0);
-    if (declared > MAX_BODY_BYTES) return json(413, { error: 'Request too large.' });
+    if (Number(request.headers.get('Content-Length') || 0) > MAX_BODY_BYTES) return json(413, { error: 'Conversation too large — start a new conversation.' });
     let raw;
     try {
       raw = await request.text();
     } catch {
       return json(400, { error: 'Could not read request.' });
     }
-    if (raw.length > MAX_BODY_BYTES) return json(413, { error: 'Request too large.' });
+    if (raw.length > MAX_BODY_BYTES) return json(413, { error: 'Conversation too large — start a new conversation.' });
     let body;
     try {
       body = JSON.parse(raw);
@@ -70,38 +73,29 @@ export function createHandler({ callModel, now = () => Date.now() }) {
 
     if (!env.ANTHROPIC_API_KEY) {
       if (env.MOCK_MODE === 'true') {
-        return json(200, { mode: 'mock', message: '[MOCK RESPONSE — not AI-generated] The backend is running without an API key. Your message was received and validated; no coaching advice was generated.', intents: ['question'], followUpQuestion: null, safetyLevel: 'none', proposal: null, availabilityUpdate: null });
+        return json(200, { mode: 'mock', model: 'mock', stopReason: 'end_turn', content: [{ type: 'text', text: '[DEVELOPMENT MOCK — not AI-generated] The backend is running without ANTHROPIC_API_KEY. Your message reached the server; no coaching was generated.' }] });
       }
-      return json(503, { error: 'AI backend is deployed but ANTHROPIC_API_KEY is not set.', code: 'not_configured' });
+      return json(503, { error: 'The AI Coach backend is deployed but ANTHROPIC_API_KEY is not set.', code: 'not_configured' });
     }
 
     let result;
     try {
-      result = await callModel(env, { system: SYSTEM_PROMPT, messages: buildMessages(body.messages, body.context) });
+      result = await callModel(env, { system: SYSTEM_PROMPT, tools: TOOLS, messages: body.messages });
     } catch (e) {
-      // Log only the error class/status — never request bodies, keys, or headers.
+      // Log only error class/status — never transcript content, keys or headers.
       console.error('coach_model_error', e?.name || 'Error', e?.status || '');
-      if (e?.name === 'APIConnectionTimeoutError' || e?.name === 'TimeoutError' || e?.name === 'AbortError') return json(504, { error: 'The AI model timed out. Please try again.' });
-      if (e?.status === 429) return json(429, { error: 'The AI service is busy. Try again shortly.' });
-      if (e?.status === 401 || e?.status === 403) return json(502, { error: 'The AI service rejected the server credentials.' });
-      return json(502, { error: 'The AI service is unavailable right now.' });
+      if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return json(504, { error: 'The AI model timed out. Please try again.', code: 'timeout' });
+      if (e?.status === 429 || e?.status === 529) return json(503, { error: 'The AI service is busy right now. Try again shortly.', code: 'busy' });
+      if (e?.status === 401 || e?.status === 403) return json(502, { error: 'The AI service rejected the server\'s API key. Check ANTHROPIC_API_KEY.', code: 'bad_key' });
+      if (e?.status === 400) return json(502, { error: 'The AI service rejected the conversation. Start a new conversation and try again.', code: 'bad_request' });
+      return json(502, { error: 'The AI service is unavailable right now.', code: 'unavailable' });
     }
     if (result.stopReason === 'refusal') {
-      return json(200, { mode: 'ai', model: result.model, message: "I can't help with that request. I can help adjust training sessions, recovery, and race preparation.", intents: ['question'], followUpQuestion: null, safetyLevel: 'none', proposal: null, availabilityUpdate: null });
+      return json(200, { mode: 'ai', model: result.model, stopReason: 'refusal', content: [{ type: 'text', text: "I can't help with that request. I'm happy to help with your training, recovery, schedule and race preparation." }] });
     }
-    if (result.stopReason === 'max_tokens') return json(502, { error: 'The AI response was cut off. Please try a shorter request.', code: 'malformed_output' });
-    let parsed;
-    try {
-      parsed = JSON.parse(result.text);
-    } catch {
-      return json(502, { error: 'The AI returned malformed output.', code: 'malformed_output' });
-    }
-    const v = validateOutput(parsed, body.context);
-    if (!v.ok) {
-      console.error('coach_output_invalid', v.errors.join(','));
-      return json(502, { error: 'The AI returned output that failed validation.', code: 'malformed_output' });
-    }
-    return json(200, { mode: 'ai', model: result.model, ...v.value });
+    const content = sanitizeContent(result.content);
+    if (!content.length) return json(502, { error: 'The AI returned an empty response.', code: 'empty' });
+    return json(200, { mode: 'ai', model: result.model, stopReason: result.stopReason, content, inputTransformations: result.inputTransformations || [] });
   };
 }
 
