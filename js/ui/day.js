@@ -6,6 +6,7 @@ import { update } from '../store/store.js';
 import { PHASES } from '../plan/weeks.js';
 import { dayCarbClass, dailyTargets } from '../lib/nutrition.js';
 import { RACE } from '../data/race.js';
+import { effectiveSessionsOn } from '../lib/adjustments.js';
 
 const SYMPTOMS = ['sore throat', 'congestion', 'fever', 'chest pain', 'dizziness', 'fainting', 'palpitations', 'shortness of breath at rest', 'unusual swelling'];
 
@@ -17,11 +18,9 @@ export function clampToPlan(ctx, iso) {
   return iso;
 }
 
+/** Effective (athlete-approved) sessions for a date — the single view every page uses. */
 export function sessionsOn(ctx, date) {
-  const day = ctx.plan.byDate[date];
-  const own = day ? day.sessions.filter((s) => !ctx.state.reschedules[s.id]) : [];
-  const moved = Object.entries(ctx.state.reschedules).filter(([, d]) => d === date).map(([id]) => ctx.plan.sessions[id]).filter(Boolean);
-  return [...own, ...moved];
+  return effectiveSessionsOn(ctx.plan, ctx.state, date);
 }
 
 export function faithCard(b, { compact = false } = {}) {
@@ -34,8 +33,8 @@ export function dayView(ctx, [dateParam], rerender) {
   const week = ctx.plan.weeks[day.week];
   const sessions = sessionsOn(ctx, date);
   const d = ctx.state.daily[date] || {};
-  const tgt = dailyTargets(ctx.bm.weightKg, dayCarbClass({ sessions }));
-  const totalMin = sessions.reduce((a, s) => a + (s.sport === 'rest' ? 0 : s.durationMin || 0), 0);
+  const tgt = dailyTargets(ctx.bm.weightKg, dayCarbClass({ sessions: sessions.filter((s) => !s.cancelled) }));
+  const totalMin = sessions.reduce((a, s) => a + (s.sport === 'rest' || s.cancelled ? 0 : s.durationMin || 0), 0);
   const prev = addDays(date, -1);
   const next = addDays(date, 1);
   const isToday = date === ctx.today;

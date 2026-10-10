@@ -3,6 +3,7 @@
 // index — useful for trends, never proof of fitness or readiness on its own.
 
 import { validHR } from './zones.js';
+import { effectiveSessionsOn } from './adjustments.js';
 
 export const SPORTS = ['swim', 'bike', 'run', 'strength'];
 export const DONE = new Set(['completed', 'modified', 'replaced']);
@@ -12,15 +13,18 @@ export function effectiveDate(session, reschedules = {}) {
 }
 
 /** Planned & actual volume for a set of days. Rest/optional mobility excluded from planned. */
-export function aggregate(days, logs = {}, { includeOptional = false } = {}) {
+export function aggregate(days, logs = {}, { includeOptional = false, plan = null, state = null } = {}) {
   const planned = blank();
   const actual = blank();
   for (const d of days) {
-    for (const s of d.sessions) {
+    // With plan+state, use the athlete-approved (effective) schedule: moved sessions count on
+    // their new date, cancelled ones drop out of "planned", shortened ones use the new duration.
+    const list = plan && state ? effectiveSessionsOn(plan, state, d.date) : d.sessions;
+    for (const s of list) {
       if (s.sport === 'rest') continue;
       const k = SPORTS.includes(s.sport) ? s.sport : 'other';
       const optional = s.priority === 'Optional';
-      if (!optional || includeOptional) {
+      if (!s.cancelled && (!optional || includeOptional)) {
         planned[k] += s.durationMin || 0;
         planned.total += s.durationMin || 0;
         planned.sessions += 1;
@@ -39,7 +43,7 @@ export function aggregate(days, logs = {}, { includeOptional = false } = {}) {
     }
   }
   // Recovery weeks made entirely of optional sessions (e.g., post-race Week 0) still show their plan.
-  if (planned.total === 0 && !includeOptional && days.some((d) => d.sessions.some((s) => s.priority === 'Optional' && s.durationMin))) return aggregate(days, logs, { includeOptional: true });
+  if (planned.total === 0 && !includeOptional && days.some((d) => d.sessions.some((s) => s.priority === 'Optional' && s.durationMin))) return aggregate(days, logs, { includeOptional: true, plan, state });
   return { planned, actual, completion: planned.total ? actual.total / planned.total : null, keyCompletion: planned.key ? actual.key / planned.key : null };
 }
 

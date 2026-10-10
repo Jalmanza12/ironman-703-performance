@@ -16,6 +16,9 @@ export function emptyState() {
     daily: {}, // date -> {sleepH, sleepQ, fatigue, soreness, motivation, pain, painLocation, symptoms, weightLb, hunger, notes}
     strength: [], // {id, date, sessionId, exercise, load, reps, rir}
     reschedules: {}, // sessionId -> newDate
+    overrides: {}, // sessionId -> { cancelled, durationMin, replacement, changeId } (approved plan changes)
+    changeHistory: [], // approved adjustments with before/after values (undo + audit)
+    coach: { messages: [] }, // AI Coach conversation (never the source of truth for the plan)
     predictionHistory: [], // {date, lo, mid, hi}
     settings: { poolUnit: 'yd' },
   };
@@ -86,8 +89,9 @@ export function migrate(obj) {
   const base = emptyState();
   if (!obj || typeof obj !== 'object') return base;
   const out = { ...base, ...obj };
-  for (const k of ['benchmarks', 'strength', 'predictionHistory']) if (!Array.isArray(out[k])) out[k] = [];
-  for (const k of ['profile', 'logs', 'daily', 'reschedules', 'settings']) if (!out[k] || typeof out[k] !== 'object' || Array.isArray(out[k])) out[k] = base[k];
+  for (const k of ['benchmarks', 'strength', 'predictionHistory', 'changeHistory']) if (!Array.isArray(out[k])) out[k] = [];
+  for (const k of ['profile', 'logs', 'daily', 'reschedules', 'overrides', 'settings', 'coach']) if (!out[k] || typeof out[k] !== 'object' || Array.isArray(out[k])) out[k] = base[k];
+  if (!Array.isArray(out.coach.messages)) out.coach = { messages: [] };
   out.version = SCHEMA_VERSION;
   return out;
 }

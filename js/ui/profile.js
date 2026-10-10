@@ -5,6 +5,9 @@ import { parseDuration, formatDuration } from '../lib/units.js';
 import { powerZones, hrZones, runPaceZones, swimZones, maf180 } from '../lib/zones.js';
 import { isISODate, formatShort } from '../lib/dates.js';
 import { benchmarkTrend } from '../lib/benchmarks.js';
+import { DAYS } from '../lib/adjustments.js';
+
+const DAY_LABEL = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
 
 // Questionnaire definition: [key, label, type, options/hint]
 const SECTIONS = [
@@ -96,6 +99,9 @@ export function profileView(ctx, _p, rerender) {
       <button class="btn primary">Save profile</button></form>
     </div>
     <div class="stack">
+      <div class="card"><h2>Weekly availability</h2><p class="small text-2">Used by the AI Coach and the plan validator: changes are never moved onto unavailable days, and days over your time limit are flagged. You can also change this by telling the AI Coach.</p>
+        <form id="avform" novalidate><table class="ex"><thead><tr><th>Day</th><th>Can train</th><th>Max min</th></tr></thead><tbody>${['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((d) => { const a = (pr.availability || {})[d] || {}; return `<tr><td>${DAY_LABEL[d]}</td><td><input type="checkbox" name="av_${d}" aria-label="${DAY_LABEL[d]} available" ${a.available === false ? '' : 'checked'} style="width:auto;min-height:0"></td><td><input type="number" name="mx_${d}" min="0" max="600" inputmode="numeric" value="${esc(a.maxMinutes ?? '')}" aria-label="${DAY_LABEL[d]} max minutes" placeholder="—"></td></tr>`; }).join('')}</tbody></table>
+        <div class="row" style="margin-top:8px"><button class="btn primary sm">Save availability</button><span class="err" id="averr"></span></div></form></div>
       <div class="card"><h2>Add benchmark</h2><p class="small text-2">Only enter results from a valid test or race. Test days in the plan have a built-in form that calculates these for you.</p>
         <form id="bform" novalidate><div class="fields" style="grid-template-columns:1fr">
           <label class="f">Type<select name="type" id="btype">${Object.entries(BENCHMARK_TYPES).map(([k, d]) => `<option value="${k}">${esc(d.label)}</option>`).join('')}</select></label>
@@ -126,6 +132,20 @@ export function profileView(ctx, _p, rerender) {
           s.settings.poolUnit = fd.poolUnit || s.settings.poolUnit;
         });
         toast('Profile saved.');
+        rerender();
+      });
+      root.querySelector('#avform').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const av = {};
+        for (const d of DAYS) {
+          const raw = fd.get(`mx_${d}`);
+          const mx = raw === '' || raw == null ? null : Number(raw);
+          if (mx != null && !(Number.isInteger(mx) && mx >= 0 && mx <= 600)) { root.querySelector('#averr').textContent = 'Max minutes must be a whole number 0–600.'; return; }
+          av[d] = { available: fd.get(`av_${d}`) === 'on', maxMinutes: mx };
+        }
+        update((s) => { s.profile.availability = av; });
+        toast('Availability saved.');
         rerender();
       });
       const btype = root.querySelector('#btype');

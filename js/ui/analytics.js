@@ -12,13 +12,14 @@ export function analyticsView(ctx) {
   const { plan, state, history } = ctx;
   const upto = plan.weeks.filter((w) => w.start <= ctx.today);
   const weeks = upto.length ? upto : plan.weeks.slice(0, 1);
-  const vols = weeks.map((w) => ({ w, a: aggregate(w.days, state.logs) }));
+  const eff = { plan, state };
+  const vols = weeks.map((w) => ({ w, a: aggregate(w.days, state.logs, eff) }));
   const sportSeries = [{ key: 'swim', name: 'Swim', color: C.swim }, { key: 'bike', name: 'Bike', color: C.bike }, { key: 'run', name: 'Run', color: C.run }, { key: 'strength', name: 'Strength', color: C.strength }];
 
   // Load series
   const pastDays = plan.days.filter((d) => d.date <= ctx.today);
   const series = dailyLoad(pastDays, state.logs);
-  const weeklyLoad = weeks.map((w) => ({ label: `W${w.n}`, actual: aggregate(w.days, state.logs).actual.load, planned: w.totals.load }));
+  const weeklyLoad = weeks.map((w) => ({ label: `W${w.n}`, actual: aggregate(w.days, state.logs, eff).actual.load, planned: aggregate(w.days, state.logs, eff).planned.load }));
   const acr = series.length ? acuteChronic(series, series.length - 1) : null;
 
   // Benchmarks

@@ -24,7 +24,8 @@ export function dashboardView(ctx) {
   const date = clampToPlan(ctx, ctx.today);
   const day = ctx.plan.byDate[date];
   const week = ctx.plan.weeks[day.week];
-  const wk = aggregate(week.days, ctx.state.logs);
+  const eff = { plan: ctx.plan, state: ctx.state };
+  const wk = aggregate(week.days, ctx.state.logs, eff);
   const sessions = sessionsOn(ctx, date);
   const pct = Math.max(0, Math.min(1, diffDays(ctx.plan.days[0].date, ctx.today) / (ctx.plan.days.length - 1)));
   const p = ctx.prediction;
@@ -33,7 +34,7 @@ export function dashboardView(ctx) {
   // Weekly volume chart (planned dashed overlay vs completed stacked by sport) through this week.
   const weeks = ctx.plan.weeks.filter((w) => w.n <= Math.min(day.week + 2, 22));
   const vol = weeks.map((w) => {
-    const a = aggregate(w.days, ctx.state.logs);
+    const a = aggregate(w.days, ctx.state.logs, eff);
     return { label: `W${w.n}`, values: { swim: a.actual.swim / 60, bike: a.actual.bike / 60, run: a.actual.run / 60, strength: a.actual.strength / 60 }, tip: `Week ${w.n}: ${formatMinutes(a.actual.total)} done of ${formatMinutes(a.planned.total)} planned`, planned: a.planned.total / 60 };
   });
   const weights = Object.entries(ctx.state.daily).filter(([, d]) => d.weightLb > 0).sort(([a], [b]) => a.localeCompare(b)).slice(-60);
@@ -41,6 +42,7 @@ export function dashboardView(ctx) {
   const bmRow = (label, v) => `<dt>${esc(label)}</dt><dd>${v == null ? NE : v}</dd>`;
   const unit = ctx.bm.poolUnit || 'yd';
   const alerts = ctx.coaching.filter((c) => c.level !== 'info').slice(0, 3);
+  const recentChanges = (ctx.state.changeHistory || []).filter((h) => h.status === 'applied' && (Date.now() - new Date(h.at).getTime()) < 3 * 86400000).slice(-2).reverse();
 
   const html = `
   <section class="hero">
@@ -52,6 +54,7 @@ export function dashboardView(ctx) {
   <div class="grid g3" style="margin-top:16px">
     <div class="card span2"><div class="card-head"><h2>${date === ctx.today ? 'Today' : esc(formatLong(date))}</h2><a href="#/day/${date}">Open day →</a></div>
       <p class="text-2">${esc(day.objective)}</p><div class="stack">${sessions.map((s) => sessionCard(s, ctx)).join('')}</div>
+      ${recentChanges.map((h) => `<div class="alert" style="margin-top:12px"><div class="h">✎ Plan adjusted: ${esc(h.summary || 'change applied')}</div><div class="small muted">${esc(new Date(h.at).toLocaleString())} · ${h.changes.length} session${h.changes.length === 1 ? '' : 's'} · <a href="#/coach">review or undo in AI Coach</a></div></div>`).join('')}
       ${alerts.length ? `<div class="stack" style="margin-top:14px">${alerts.map((c) => `<div class="alert ${c.level}"><div class="h">${esc(c.title)}</div><div class="small">${esc(c.observation)} ${esc(c.suggestion)}</div></div>`).join('')}<a class="small" href="#/reviews">All coaching notes →</a></div>` : ''}
     </div>
     ${faithCard(day.bible, { compact: true })}

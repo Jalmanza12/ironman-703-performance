@@ -46,17 +46,17 @@ function monthView(ctx, base) {
       const ss = sessionsOn(ctx, date).filter((s) => s.sport !== 'mobility');
       cells += `<a class="cal-cell ${inMonth ? '' : 'out'} ${date === ctx.today ? 'today' : ''} ${date < ctx.today ? 'past' : ''}" href="#/day/${date}" aria-label="${esc(formatShort(date))}: ${esc(ss.map((s) => s.title).join('; '))}">
         <span class="d"><span>${parseISO(date).getUTCDate()}</span></span>
-        ${ss.map((s) => `<span class="cal-chip ${s.sport}">${statusDot(ctx.state.logs[s.id]?.status)}${esc(SHORT[s.sport] || s.sport)}${s.durationMin ? ` ${s.durationMin}'` : ''}${s.priority?.startsWith('Key') && s.sport !== 'rest' ? ' ★' : ''}</span>`).join('')}
+        ${ss.map((s) => `<span class="cal-chip ${s.sport} ${s.cancelled ? 'cancelled' : ''}" title="${esc(s.cancelled ? 'Skipped by approved plan change' : s.adjusted ? 'Adjusted by approved plan change' : '')}">${statusDot(ctx.state.logs[s.id]?.status)}${esc(SHORT[s.sport] || s.sport)}${s.durationMin ? ` ${s.durationMin}'` : ''}${s.priority?.startsWith('Key') && s.sport !== 'rest' ? ' ★' : ''}${s.adjusted && !s.cancelled ? ' ✎' : ''}</span>`).join('')}
       </a>`;
     }
   }
-  return `${header(ctx, 'month', base, prev, next, monthLabel(base))}${legend()}<div class="card" style="margin-top:12px;padding:10px"><div class="cal-month">${cells}</div></div><p class="small muted" style="margin-top:8px">★ = key session. Tap a week label for the week view; tap a day for full workouts.</p>`;
+  return `${header(ctx, 'month', base, prev, next, monthLabel(base))}${legend()}<div class="card" style="margin-top:12px;padding:10px"><div class="cal-month">${cells}</div></div><p class="small muted" style="margin-top:8px">★ = key session · ✎ = adjusted by an approved change · struck-through = skipped by plan change. Tap a week label for the week view; tap a day for full workouts.</p>`;
 }
 
 function weekView(ctx, base) {
   const start = mondayOf(base);
   const w = ctx.plan.weeks.find((x) => x.start === start) || ctx.plan.weeks[0];
-  const agg = aggregate(w.days, ctx.state.logs);
+  const agg = aggregate(w.days, ctx.state.logs, { plan: ctx.plan, state: ctx.state });
   const days = w.days.map((d) => `<div class="week-day ${d.date === ctx.today ? 'today' : ''}"><div class="row between"><a class="wd" href="#/day/${d.date}">${esc(formatShort(d.date))}</a></div>${sessionsOn(ctx, d.date).map((s) => sessionCard(s, ctx)).join('')}<div class="small muted">📖 ${esc(d.bible.ref)}</div></div>`).join('');
   const dl = w.deload;
   return `${header(ctx, 'week', w.start, addDays(w.start, -7), addDays(w.start, 7), `Week ${w.n} — ${w.title}`)}

@@ -9,7 +9,7 @@ import { formatShort } from './dates.js';
 export function weeklyReview({ plan, state, bm, weekN, prediction, coaching }) {
   const w = plan.weeks[weekN];
   if (!w) return null;
-  const agg = aggregate(w.days, state.logs);
+  const agg = aggregate(w.days, state.logs, { plan, state });
   const sessions = w.days.flatMap((d) => d.sessions).filter((s) => s.sport !== 'rest');
   const logged = sessions.filter((s) => state.logs[s.id]);
   const keys = sessions.filter((s) => s.priority?.startsWith('Key'));
@@ -60,8 +60,8 @@ export function weeklyReview({ plan, state, bm, weekN, prediction, coaching }) {
 export function blockReview({ plan, state, history, endWeekN }) {
   const weeks = plan.weeks.slice(Math.max(0, endWeekN - 3), endWeekN + 1);
   const days = weeks.flatMap((w) => w.days);
-  const agg = aggregate(days, state.logs);
-  const perWeek = weeks.map((w) => ({ n: w.n, ...aggregate(w.days, state.logs) }));
+  const agg = aggregate(days, state.logs, { plan, state });
+  const perWeek = weeks.map((w) => ({ n: w.n, ...aggregate(w.days, state.logs, { plan, state }) }));
   const tests = Object.fromEntries(['ftp', 'css', 'thresholdPace'].map((t) => [t, (history[t] || []).filter((b) => b.date >= weeks[0].start && b.date <= weeks[weeks.length - 1].end)]));
   const recs = [];
   if ((agg.keyCompletion ?? 0) < 0.7) recs.push('Key-session completion under 70%: before adding load, solve the scheduling problem — move key sessions to the most reliable days and treat others as optional.');

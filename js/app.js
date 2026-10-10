@@ -1,12 +1,7 @@
 // App shell: builds context (plan, saved state, benchmarks, prediction) and routes views.
 
-import { buildPlan } from './plan/generator.js';
-import { load, update } from './store/store.js';
-import { currentBenchmarks } from './lib/benchmarks.js';
-import { predictRace } from './lib/prediction.js';
-import { predictionEvidence } from './lib/load.js';
-import { runCoaching } from './lib/coaching.js';
-import { todayLocalISO } from './lib/dates.js';
+import { update } from './store/store.js';
+import { context } from './context.js';
 import { bindTooltips } from './ui/charts.js';
 import { esc } from './ui/h.js';
 
@@ -21,22 +16,14 @@ import { reviewsView } from './ui/reviews.js';
 import { fuelView } from './ui/fuel.js';
 import { profileView } from './ui/profile.js';
 import { moreView, methodView } from './ui/more.js';
+import { coachView } from './ui/coach.js';
 
 const ROUTES = {
   '': dashboardView, day: dayView, session: sessionView, calendar: calendarView, analytics: analyticsView,
-  race: raceView, raceday: raceDayView, reviews: reviewsView, fuel: fuelView, profile: profileView, more: moreView, method: methodView,
+  race: raceView, raceday: raceDayView, coach: coachView, reviews: reviewsView, fuel: fuelView, profile: profileView, more: moreView, method: methodView,
 };
 
-export function context() {
-  const plan = buildPlan();
-  const state = load();
-  const { values: bm, history } = currentBenchmarks(state);
-  const today = todayLocalISO();
-  const evidence = predictionEvidence(plan, state, bm);
-  const prediction = predictRace(bm, state.profile, evidence);
-  const coaching = runCoaching({ plan, state, bm, history, today });
-  return { plan, state, bm, history, today, evidence, prediction, coaching };
-}
+export { context };
 
 /** Record the prediction once per day when it changes (for the history chart). */
 function trackPrediction(ctx) {

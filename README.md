@@ -21,6 +21,7 @@ A personal training and performance platform for **IRONMAN 70.3 Dallas–Little 
 | **Race-day mode** | Phone-friendly splits, pacing bands, fueling schedule, checklists, reminders, race-day passage. |
 | **Fuel** | Daily carbohydrate/protein by day type, session fueling, sweat-rate calculator, weight trend, body-composition guidance. |
 | **Reviews** | Weekly reviews and 4-week block reviews generated from your logs. |
+| **AI Coach** | Talk to your plan ("I can't train tomorrow", "traveling Mon–Wed"). Proposals are validated against your real schedule (no stacking hard days, no cramming, completed history untouched) and applied only when you press **Accept**; full change history with undo. Uses Claude via a secure Cloudflare Worker; falls back to a clearly labeled rules-based planner. See [`docs/ai-coach.md`](docs/ai-coach.md). |
 | **Faith** | A unique passage every day (161 passages, Old and New Testament) with summary, reflection tied to that day's training, and a question or intention. |
 
 ## Docs
@@ -35,6 +36,10 @@ A personal training and performance platform for **IRONMAN 70.3 Dallas–Little 
 3. On test days (Oct 27 FTP, Oct 28 CSS, Nov 1 run TT, then end of deload weeks), enter results in the form on the session page.
 4. Export a **JSON backup** weekly (Profile → Data).
 
+## AI Coach backend (optional)
+
+The AI Coach needs a small serverless backend so the Anthropic API key never reaches the browser. Deploy `worker/` to Cloudflare (`npx wrangler login`, `wrangler secret put ANTHROPIC_API_KEY`, `wrangler secret put COACH_ACCESS_CODE`, `wrangler deploy`), then paste the Worker URL and access code into **AI Coach → Connection**. Full steps: [`docs/ai-coach.md`](docs/ai-coach.md). Without it, the coach runs as a rules-based planner (labeled "not AI").
+
 ## Data & privacy
 
 - Data lives **only in your browser** (`localStorage`) on the device you use. Nothing is sent anywhere; the public repository contains no personal training data, keys, or credentials.
@@ -46,7 +51,7 @@ A personal training and performance platform for **IRONMAN 70.3 Dallas–Little 
 No build step and no dependencies — native ES modules served as static files.
 
 ```bash
-npm test                 # node:test suite (dates, conversions, zones, prediction, plan integrity, rescheduling, nutrition)
+npm test                 # node:test suite (calculations, plan integrity, adjustments, AI coach, worker)
 node scripts/smoke.mjs   # renders every view with empty and populated data
 npm run plan:export      # regenerate docs/training-plan.md
 npm run serve            # http://localhost:8080
@@ -60,6 +65,7 @@ js/plan/        workout builders (swim/bike/run/strength), week table, calendar 
 js/lib/         dates, units, zones, targets, benchmarks, load, prediction, bike physics,
                 coaching rules, readiness, reschedule, nutrition, reviews
 js/store/       localStorage persistence, JSON/CSV import-export
+worker/         Cloudflare Worker: secure AI Coach endpoint (Anthropic SDK)
 js/ui/          views (dashboard, day, session, calendar, analytics, race, race-day, reviews, fuel, profile)
 tests/          unit tests
 ```

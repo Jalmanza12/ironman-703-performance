@@ -55,7 +55,7 @@ export function runCoaching({ plan, state, bm, history = {}, today }) {
 
   // 4. Missed sessions — never cram.
   const window = plan.days.filter((d) => d.date <= today && d.date > addDays(today, -7));
-  const keys = window.flatMap((d) => d.sessions.filter((s) => s.priority?.startsWith('Key') && s.sport !== 'rest'));
+  const keys = window.flatMap((d) => d.sessions.filter((s) => s.priority?.startsWith('Key') && s.sport !== 'rest' && !state.overrides?.[s.id]?.cancelled && !state.reschedules?.[s.id]));
   const missedKeys = keys.filter((s) => state.logs[s.id]?.status === 'skipped' || (!state.logs[s.id] && s.date < today));
   if (keys.length && missedKeys.length >= 2) {
     out.push({ level: 'caution', title: 'Several key sessions missed this week', observation: `${missedKeys.length} of ${keys.length} key sessions skipped or unlogged in the last 7 days.`, suggestion: 'Do not add them to the coming days. Resume the plan as written; if a test or long session was missed, use Reschedule to place it only where recovery allows.', why: 'Cramming missed volume concentrates load and raises injury and illness risk; consistency over weeks matters more than any single session.' });

@@ -7,6 +7,8 @@ import { rescheduleOptions } from '../lib/reschedule.js';
 import { ftpFrom20Min } from '../lib/zones.js';
 import { update, uid } from '../store/store.js';
 import { PHASES } from '../plan/weeks.js';
+import { effectiveSession, applyProposal, undoChange } from '../lib/adjustments.js';
+import { load, save } from '../store/store.js';
 
 export function targetHTML(t, bm) {
   const d = describeTarget(t, bm);
@@ -30,32 +32,44 @@ export function sessionMeta(s, ctx) {
   return bits.map(esc).join(' · ');
 }
 
-export function sessionCard(s, ctx) {
+export function adjustmentChips(e) {
+  if (!e) return '';
+  const out = [];
+  if (e.cancelled) out.push('<span class="chip adj">Skipped (plan change)</span>');
+  if (e.moved) out.push(`<span class="chip adj">Moved from ${esc(formatShort(e.originalDate))}</span>`);
+  if (e.originalDurationMin) out.push(`<span class="chip adj">Shortened from ${e.originalDurationMin} min</span>`);
+  if (e.replacedFrom) out.push('<span class="chip adj">Replaced</span>');
+  return out.join('');
+}
+
+export function sessionCard(s0, ctx) {
+  const s = s0.originalDate ? s0 : effectiveSession(ctx.plan, ctx.state, s0.id) || s0;
   const log = ctx.state.logs[s.id];
-  const moved = ctx.state.reschedules[s.id];
-  return `<a class="session ${esc(s.sport)}" href="#/session/${encodeURIComponent(s.id)}">
+  return `<a class="session ${esc(s.sport)} ${s.cancelled ? 'cancelled' : ''}" href="#/session/${encodeURIComponent(s.id)}">
     <div class="row between"><span class="t">${esc(s.title)}</span><span class="row" style="gap:6px">${priorityChip(s.priority)}${statusDot(log?.status)}</span></div>
-    <div class="meta"><span>${sessionMeta(s, ctx)}</span>${moved ? `<span class="chip warn">Moved to ${esc(formatShort(moved))}</span>` : ''}</div>
+    <div class="meta"><span>${sessionMeta(s, ctx)}</span>${adjustmentChips(s)}</div>
   </a>`;
 }
 
 const MOD_LABEL = { fatigue: 'If fatigued / poor sleep', weather: 'Weather', time: 'Limited time', illness: 'Pain or illness' };
 
 export function sessionView(ctx, [id], rerender) {
-  const s = ctx.plan.sessions[id];
+  const s = effectiveSession(ctx.plan, ctx.state, id);
   if (!s) return '<div class="card"><h2>Session not found</h2><a href="#/calendar">Back to calendar</a></div>';
-  const day = ctx.plan.byDate[s.date];
+  const day = ctx.plan.byDate[s.originalDate];
   const bm = ctx.bm;
   const log = ctx.state.logs[s.id];
   const fb = log ? compareSession(s, log, bm) : null;
   const provisional = [...s.warmup, ...s.main, ...s.cooldown].some((st) => describeTarget(st.target, bm)?.provisional);
-  const moved = ctx.state.reschedules[s.id];
+  const moved = s.moved ? s.date : null;
+  const lastChange = [...(ctx.state.changeHistory || [])].reverse().find((h) => h.status === 'applied' && h.changes.some((c) => c.workoutId === s.id));
 
   const html = `
   <div class="page-head">
     <div>
       <div class="eyebrow">${esc(formatLong(s.date))} · Week ${s.week} · <a href="#/day/${s.date}">day view</a></div>
       <h1>${esc(s.title)}</h1>
+      ${s.adjusted ? `<div class="alert" style="margin:8px 0"><div class="h">Adjusted by an approved plan change</div><div class="row">${adjustmentChips(s)}</div>${lastChange ? `<div class="small muted">${esc(lastChange.source === 'ai' ? 'AI Coach' : lastChange.source === 'rules' ? 'Rules-based planner' : 'Manual')} · ${esc(lastChange.summary || '')} · ${esc(lastChange.changes.find((c) => c.workoutId === s.id)?.reason || '')}</div>` : ''}${s.replacementDescription ? `<p class="small">${esc(s.replacementDescription)}</p><p class="small muted">The original workout details below are kept for reference.</p>` : ''}</div>` : ''}
       <div class="row">${sportChip(s.sport)}${priorityChip(s.priority)}<span class="phase-pill ${PHASES[s.phase].color}">${esc(PHASES[s.phase].name)}</span><span class="chip">${esc(s.type)}</span>${moved ? `<span class="chip warn">Rescheduled to ${esc(formatShort(moved))}</span>` : ''}</div>
     </div>
   </div>
@@ -133,10 +147,22 @@ export function sessionView(ctx, [id], rerender) {
         update((st) => { delete st.logs[s.id]; st.strength = st.strength.filter((x) => x.sessionId !== s.id); });
         rerender();
       });
+      // Manual moves use the same validated, history-tracked path as the AI Coach.
       root.querySelectorAll('[data-move]').forEach((b) => b.addEventListener('click', () => {
         const to = b.dataset.move;
-        update((st) => { if (to) st.reschedules[s.id] = to; else delete st.reschedules[s.id]; });
-        toast(to ? `Moved to ${formatShort(to)}.` : 'Reschedule removed.');
+        const st = load();
+        if (!to) {
+          const entry = [...(st.changeHistory || [])].reverse().find((h) => h.status === 'applied' && h.changes.some((c) => c.workoutId === s.id));
+          const r = entry ? undoChange(st, entry.id, { today: ctx.today }) : { ok: false, reason: 'No change to undo.' };
+          if (!r.ok) return toast(`Can't undo: ${r.reason}`);
+          save(r.state);
+          toast('Change undone.');
+          return rerender();
+        }
+        const res = applyProposal(ctx.plan, st, { summary: `Moved ${s.title} to ${formatShort(to)}`, changes: [{ action: 'move', workoutId: s.id, newDate: to, reason: 'Manual reschedule' }] }, { today: ctx.today, source: 'manual' });
+        if (!res.ok) return toast(res.validation.errors[0] || 'That move is not allowed.');
+        save(res.state);
+        toast(`Moved to ${formatShort(to)}.`);
         rerender();
       }));
       const tf = root.querySelector('#testform');
@@ -228,10 +254,10 @@ function feedbackCard(fb) {
 
 function rescheduleCard(s, ctx) {
   if (s.sport === 'rest' || s.sport === 'race') return '';
-  const moved = ctx.state.reschedules[s.id];
+  const moved = s.moved ? s.date : null;
   const r = rescheduleOptions(ctx.plan, s.id, { today: ctx.today, reschedules: ctx.state.reschedules });
   return `<div class="card flat"><h3>Reschedule</h3>
-    ${moved ? `<p>Currently moved to <b>${esc(formatLong(moved))}</b>. <button class="btn sm" data-move="">Undo</button></p>` : ''}
+    ${moved ? `<p>Currently moved to <b>${esc(formatLong(moved))}</b>. <button class="btn sm" data-move="">Undo last change</button></p>` : ''}${s.adjusted && !moved ? '<p class="small"><button class="btn sm" data-move="">Undo last change</button></p>' : ''}
     <p class="small text-2">${esc(r.reason)}</p>
     ${r.options.length ? `<div class="stack">${r.options.map((o) => `<div><button class="btn sm" data-move="${o.date}">Move to ${esc(formatShort(o.date))}</button><div class="small muted">${esc(o.note)}</div></div>`).join('')}</div>` : ''}
     ${r.rejected?.length ? `<details class="small" style="margin-top:8px"><summary class="muted">Why not other days?</summary><ul class="clean">${r.rejected.map((x) => `<li>${esc(formatShort(x.date))}: ${esc(x.why.join('; '))}</li>`).join('')}</ul></details>` : ''}

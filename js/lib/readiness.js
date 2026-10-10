@@ -9,7 +9,7 @@ export const WEIGHTS = { consistency: 25, swim: 10, bike: 20, run: 20, brick: 10
 
 export function readiness({ plan, state, bm, evidence, today }) {
   const past = plan.days.filter((d) => d.date < today && d.date >= '2026-10-12');
-  const sess = past.flatMap((d) => d.sessions).filter((s) => s.sport !== 'rest');
+  const sess = past.flatMap((d) => d.sessions).filter((s) => s.sport !== 'rest' && !state.overrides?.[s.id]?.cancelled);
   const keys = sess.filter((s) => s.priority?.startsWith('Key'));
   const done = (s) => DONE.has(state.logs[s.id]?.status);
   const c = {};

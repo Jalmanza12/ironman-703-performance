@@ -7,7 +7,7 @@ import { formatMinutes } from '../lib/units.js';
 const REPO = 'https://github.com/Jalmanza12/ironman-703-performance';
 
 export function moreView() {
-  const links = [['#/analytics', 'Analytics', 'Volume, load, benchmarks, strength, recovery'], ['#/reviews', 'Weekly reviews', 'Planned vs completed, lessons, next priorities'], ['#/fuel', 'Fuel & body comp', 'Daily targets, sweat test, weight trend'], ['#/raceday', 'Race-day mode', 'Splits, pacing, fueling, checklists'], ['#/profile', 'Profile & benchmarks', 'Onboarding, tests, zones, backup'], ['#/method', 'Method', 'How and why the plan is built']];
+  const links = [['#/coach', 'AI Coach', 'Adjust your plan by conversation — you approve every change'], ['#/race', 'Prediction', 'Projected splits, readiness, pacing'], ['#/analytics', 'Analytics', 'Volume, load, benchmarks, strength, recovery'], ['#/reviews', 'Weekly reviews', 'Planned vs completed, lessons, next priorities'], ['#/fuel', 'Fuel & body comp', 'Daily targets, sweat test, weight trend'], ['#/raceday', 'Race-day mode', 'Splits, pacing, fueling, checklists'], ['#/profile', 'Profile & benchmarks', 'Onboarding, tests, zones, backup'], ['#/method', 'Method', 'How and why the plan is built']];
   return `<h1>More</h1><div class="stack">${links.map(([h, t, d]) => `<a class="session" href="${h}"><span class="t">${esc(t)}</span><div class="meta">${esc(d)}</div></a>`).join('')}</div>`;
 }
 
