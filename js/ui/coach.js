@@ -13,15 +13,16 @@ import { checkHealth } from '../lib/coachCore.js';
 import { runTurn, ensureCoachState, recordEvent, newConversation } from '../lib/coachAgent.js';
 import { RACE } from '../data/race.js';
 import { PHASES } from '../plan/weeks.js';
+import { DEFAULT_COACH_ENDPOINT } from '../data/coachConfig.js';
 
 const CONN_KEY = 'im703:coach-conn'; // endpoint + access code: per-device, never exported in backups
 
 export function getConn() {
   try {
     const c = JSON.parse(localStorage.getItem(CONN_KEY) || '{}');
-    return { endpoint: c.endpoint || '', accessCode: c.accessCode || '' };
+    return { endpoint: c.endpoint || DEFAULT_COACH_ENDPOINT, accessCode: c.accessCode || '' };
   } catch {
-    return { endpoint: '', accessCode: '' };
+    return { endpoint: DEFAULT_COACH_ENDPOINT, accessCode: '' };
   }
 }
 function setConn(c) {
@@ -119,6 +120,10 @@ function messageHTML(m, ctx) {
 }
 
 function setupCard(conn) {
+  if (conn.endpoint) {
+    return `<div class="alert warning" style="margin:14px 0"><div class="h">Enter your access code to connect</div>
+      <div class="small">The AI backend is deployed. Paste your private access code under <b>Connection</b> (right) and press <b>Save</b>. It's stored only on this device.</div></div>`;
+  }
   return `<div class="alert warning" style="margin:14px 0"><div class="h">The AI Coach is not connected</div>
     <div class="small">The coach needs its secure backend (a Cloudflare Worker that holds your Anthropic API key). Until it's connected, no AI replies are generated — nothing is simulated.</div>
     <ol class="small" style="margin:6px 0 0 18px"><li>Deploy the backend: <code>cd worker && npx wrangler login && npx wrangler secret put ANTHROPIC_API_KEY && npx wrangler secret put COACH_ACCESS_CODE && npx wrangler deploy</code></li><li>Open <b>Connection</b> (right), paste the Worker URL and your access code, press <b>Save</b>, then <b>Test connection</b>.</li></ol>
@@ -133,7 +138,7 @@ export function coachView(ctx, _params, rerender) {
   const week = ctx.plan.weeks[day.week];
   const history = [...(ctx.state.changeHistory || [])].reverse().slice(0, 8);
   const daysToRace = Math.max(0, diffDays(ctx.today, RACE.date));
-  const connected = !!conn.endpoint;
+  const connected = !!conn.endpoint && !!conn.accessCode;
   const unhealthy = connected && health.state === 'bad';
 
   const html = `
@@ -249,6 +254,7 @@ export async function send(textRaw, rerender, root) {
   if (busy) return;
   const conn = getConn();
   if (!conn.endpoint) { if (errEl) errEl.textContent = 'The AI Coach is not connected yet — see the setup steps above. No reply can be generated until the backend is connected.'; return; }
+  if (!conn.accessCode) { if (errEl) errEl.textContent = 'Enter your access code under Connection (right) and press Save first.'; return; }
 
   // Safety: serious symptoms get an immediate app notice; the AI is still asked (it is instructed to prioritize safety).
   const flags = detectRedFlags(text);
