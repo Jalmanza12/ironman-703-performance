@@ -70,7 +70,7 @@ js/ui/          views (dashboard, day, session, calendar, analytics, race, race-
 tests/          unit tests
 ```
 
-Deployment: GitHub Pages from the `main` branch root.
+Deployment: GitHub Actions (`.github/workflows/pages.yml`) runs the tests, builds a cache-busted copy of the site with `node scripts/build-site.mjs` (every module URL gets `?v=<commit>` so browsers never mix old and new files), and publishes it to GitHub Pages.
 
 ## Disclaimer
 
