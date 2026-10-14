@@ -1,0 +1,26 @@
+name: Database
+
+# Starts a local Supabase Postgres (Docker on the runner), applies supabase/migrations,
+# lints them, and runs the pgTAP access-rule tests in supabase/tests. No cloud project,
+# keys or secrets are involved.
+on:
+  push:
+    paths: ['supabase/**', '.github/workflows/db.yml']
+  pull_request:
+    paths: ['supabase/**', '.github/workflows/db.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  db-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.118.0
+      - run: supabase db start
+      - run: supabase db lint --level warning --fail-on warning
+      - run: supabase test db
