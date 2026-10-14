@@ -6,8 +6,8 @@ name: Database
 on:
   push:
     paths: ['supabase/**', '.github/workflows/db.yml']
+  # Every PR runs it (no path filter) so it can be a required check without blocking PRs that don't touch supabase/.
   pull_request:
-    paths: ['supabase/**', '.github/workflows/db.yml']
   workflow_dispatch:
 
 permissions:
