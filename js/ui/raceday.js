@@ -25,7 +25,7 @@ export function raceDayView(ctx, _p, rerender) {
   const fuel = ctx.bm.weightKg ? `${Math.round(ctx.bm.weightKg)}–${Math.round(ctx.bm.weightKg * 2)} g` : '1–2 g/kg';
   const spl = p.total ? { swim: p.splits.swim.mid, t1: p.splits.t1.mid, bike: p.splits.bike.mid, t2: p.splits.t2.mid, run: p.splits.run.mid } : { swim: tg.swim, t1: tg.t1, bike: tg.bike, t2: tg.t2, run: tg.run };
   const html = `<div class="raceday">
-  <div class="page-head"><div><div class="eyebrow">Race-day mode · ${esc(RACE.name)}</div><h1>Sunday, March 14, 2027</h1><p class="text-2">Start ${esc(RACE.provisionalStartLocal)} CDT (provisional) · <b>Clocks spring forward overnight</b></p></div><button class="btn no-print" onclick="window.print()">Print</button></div>
+  <div class="page-head"><div><div class="eyebrow">Race-day mode · ${esc(RACE.name)}</div><h1>Sunday, March 14, 2027</h1><p class="text-2">Start ${esc(RACE.provisionalStartLocal)} CDT (provisional) · <b>Clocks spring forward overnight</b></p></div><button class="btn no-print" id="print">Print</button></div>
   <div class="grid g2">
     <div class="card span-all"><h2>Target splits ${p.total ? '(your projection)' : '(target budget — benchmarks not yet set)'}</h2>${splitBar(spl)}
       <div class="grid g4 stats" style="margin-top:12px">${['swim', 't1', 'bike', 't2', 'run'].map((k) => {
@@ -44,6 +44,7 @@ export function raceDayView(ctx, _p, rerender) {
   return {
     html,
     mount(root) {
+      root.querySelector('#print').addEventListener('click', () => window.print());
       root.querySelectorAll('[data-ck]').forEach((c) => c.addEventListener('change', () => update((s) => { s.settings.raceChecklist = { ...(s.settings.raceChecklist || {}), [c.dataset.ck]: c.checked }; })));
       root.querySelector('#saverem').addEventListener('click', () => { update((s) => { s.profile.raceReminders = root.querySelector('#rem').value; }); rerender(); });
       root.querySelector('#resetck').addEventListener('click', () => { update((s) => { s.settings.raceChecklist = {}; }); rerender(); });

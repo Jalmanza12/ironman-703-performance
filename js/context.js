@@ -2,7 +2,7 @@
 // Every page reads from this — one source of truth.
 
 import { buildPlan } from './plan/generator.js';
-import { load } from './store/store.js';
+import { load, update } from './store/store.js';
 import { currentBenchmarks } from './lib/benchmarks.js';
 import { predictRace } from './lib/prediction.js';
 import { predictionEvidence } from './lib/load.js';
@@ -11,7 +11,8 @@ import { todayLocalISO } from './lib/dates.js';
 
 export function context() {
   const plan = buildPlan();
-  const state = load();
+  let state = load();
+  if (state.planVersion !== plan.version) state = update((s) => { s.planVersion = plan.version; });
   const { values: bm, history } = currentBenchmarks(state);
   const today = todayLocalISO();
   const evidence = predictionEvidence(plan, state, bm);

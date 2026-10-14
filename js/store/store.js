@@ -3,7 +3,10 @@
 // Limitations (documented in README): data is per-browser/per-device, can be cleared by the
 // browser or private mode, and is not synced. Export a JSON backup weekly.
 
+import { ensureSync, snapshotOf, stampChanges, SYNC_SCHEMA } from './records.js';
+
 const KEY = 'im703:v1';
+export const STORAGE_KEY = KEY;
 export const SCHEMA_VERSION = 1;
 
 export function emptyState() {
@@ -20,10 +23,13 @@ export function emptyState() {
     changeHistory: [], // approved adjustments with before/after values (undo + audit)
     predictionHistory: [], // {date, lo, mid, hi}
     settings: { poolUnit: 'yd' },
+    planVersion: null, // fingerprint of the generated plan the session ids refer to
+    sync: { schema: SYNC_SCHEMA, stamps: {}, tombstones: {} }, // per-record change times (see records.js)
   };
 }
 
 let memory = null;
+let snapshot = new Map(); // records as of the last load/save, to stamp what each save changed
 let storageOK = true;
 
 function backend() {
@@ -52,10 +58,29 @@ export function load() {
     }
   }
   memory = state;
+  snapshot = snapshotOf(state);
   return memory;
 }
 
+/** Save an edit: records changed since the last load/save get a change stamp. */
 export function save(state = memory) {
+  snapshot = stampChanges(state, snapshot);
+  return write(state);
+}
+
+/** Replace the whole state (import / reset) without stamping — restored data keeps its own times. */
+function replace(state) {
+  snapshot = snapshotOf(state);
+  return write(state);
+}
+
+/** Drop the cached state and re-read storage (another tab saved). */
+export function reloadFromStorage() {
+  memory = null;
+  return load();
+}
+
+function write(state) {
   memory = state;
   const ls = backend();
   if (!ls) {
@@ -90,13 +115,13 @@ export function migrate(obj) {
   const out = { ...base, ...obj };
   for (const k of ['benchmarks', 'strength', 'predictionHistory', 'changeHistory']) if (!Array.isArray(out[k])) out[k] = [];
   for (const k of ['profile', 'logs', 'daily', 'reschedules', 'overrides', 'settings']) if (!out[k] || typeof out[k] !== 'object' || Array.isArray(out[k])) out[k] = base[k];
+  ensureSync(out);
   out.version = SCHEMA_VERSION;
   return out;
 }
 
 export function resetAll() {
-  memory = emptyState();
-  save(memory);
+  replace(emptyState());
 }
 
 export function uid() {
@@ -119,8 +144,7 @@ export function importJSON(text) {
   delete obj.app;
   delete obj.exportedAt;
   const s = migrate(obj);
-  memory = s;
-  save(s);
+  replace(s);
   return s;
 }
 

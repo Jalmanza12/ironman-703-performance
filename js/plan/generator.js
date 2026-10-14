@@ -4,6 +4,7 @@
 import { WEEKS, PHASES, PLAN_START, RACE_DATE } from './weeks.js';
 import { addDays, dayOfWeek, DOW } from '../lib/dates.js';
 import { BIBLE } from '../data/bible.js';
+import { hash } from '../store/records.js';
 
 let cache = null;
 
@@ -39,7 +40,13 @@ export function buildPlan() {
   }
   if (days[days.length - 1].date !== RACE_DATE) throw new Error('Plan must end on race day');
   cache = { days, weeks, byDate: Object.fromEntries(days.map((d) => [d.date, d])), sessions: Object.fromEntries(days.flatMap((d) => d.sessions.map((s) => [s.id, s]))) };
+  cache.version = planFingerprint(cache);
   return cache;
+}
+
+/** Fingerprint of which session each id refers to. Changes whenever saved logs could attach to a different workout. */
+export function planFingerprint(plan) {
+  return hash(Object.values(plan.sessions).map((s) => `${s.id}|${s.sport}|${s.title}`).sort().join('\n'));
 }
 
 export function dayObjective(day) {
