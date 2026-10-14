@@ -16,11 +16,10 @@ import { reviewsView } from './ui/reviews.js';
 import { fuelView } from './ui/fuel.js';
 import { profileView } from './ui/profile.js';
 import { moreView, methodView } from './ui/more.js';
-import { coachView } from './ui/coach.js';
 
 const ROUTES = {
   '': dashboardView, day: dayView, session: sessionView, calendar: calendarView, analytics: analyticsView,
-  race: raceView, raceday: raceDayView, coach: coachView, reviews: reviewsView, fuel: fuelView, profile: profileView, more: moreView, method: methodView,
+  race: raceView, raceday: raceDayView, reviews: reviewsView, fuel: fuelView, profile: profileView, more: moreView, method: methodView,
 };
 
 export { context };

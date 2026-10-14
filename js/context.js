@@ -1,5 +1,5 @@
 // Builds the shared per-render context: plan, saved state, benchmarks, prediction, coaching.
-// Every page (and the AI Coach) reads from this — one source of truth.
+// Every page reads from this — one source of truth.
 
 import { buildPlan } from './plan/generator.js';
 import { load } from './store/store.js';

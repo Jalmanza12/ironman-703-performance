@@ -255,7 +255,7 @@ export function mergeAvailability(current, u) {
  * Apply an approved proposal atomically. Returns { ok, state, entry } or { ok:false, stale?, validation }.
  * `stale` means the plan changed since the proposal was created: re-validate and re-confirm.
  */
-export function applyProposal(plan, state, proposal, { today, source = 'ai', now = new Date().toISOString(), id } = {}) {
+export function applyProposal(plan, state, proposal, { today, source = 'manual', now = new Date().toISOString(), id } = {}) {
   if (proposal.fingerprint != null && proposal.fingerprint !== fingerprint(state, affectedIds(proposal))) {
     return { ok: false, stale: true, validation: validateProposal(plan, state, proposal, { today }) };
   }

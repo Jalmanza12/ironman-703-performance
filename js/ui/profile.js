@@ -99,7 +99,7 @@ export function profileView(ctx, _p, rerender) {
       <button class="btn primary">Save profile</button></form>
     </div>
     <div class="stack">
-      <div class="card"><h2>Weekly availability</h2><p class="small text-2">Used by the AI Coach and the plan validator: changes are never moved onto unavailable days, and days over your time limit are flagged. You can also change this by telling the AI Coach.</p>
+      <div class="card"><h2>Weekly availability</h2><p class="small text-2">Used by the plan validator: changes are never moved onto unavailable days, and days over your time limit are flagged.</p>
         <form id="avform" novalidate><table class="ex"><thead><tr><th>Day</th><th>Can train</th><th>Max min</th></tr></thead><tbody>${['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((d) => { const a = (pr.availability || {})[d] || {}; return `<tr><td>${DAY_LABEL[d]}</td><td><input type="checkbox" name="av_${d}" aria-label="${DAY_LABEL[d]} available" ${a.available === false ? '' : 'checked'} style="width:auto;min-height:0"></td><td><input type="number" name="mx_${d}" min="0" max="600" inputmode="numeric" value="${esc(a.maxMinutes ?? '')}" aria-label="${DAY_LABEL[d]} max minutes" placeholder="—"></td></tr>`; }).join('')}</tbody></table>
         <div class="row" style="margin-top:8px"><button class="btn primary sm">Save availability</button><span class="err" id="averr"></span></div></form></div>
       <div class="card"><h2>Add benchmark</h2><p class="small text-2">Only enter results from a valid test or race. Test days in the plan have a built-in form that calculates these for you.</p>

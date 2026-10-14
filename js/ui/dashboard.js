@@ -54,7 +54,7 @@ export function dashboardView(ctx) {
   <div class="grid g3" style="margin-top:16px">
     <div class="card span2"><div class="card-head"><h2>${date === ctx.today ? 'Today' : esc(formatLong(date))}</h2><a href="#/day/${date}">Open day →</a></div>
       <p class="text-2">${esc(day.objective)}</p><div class="stack">${sessions.map((s) => sessionCard(s, ctx)).join('')}</div>
-      ${recentChanges.map((h) => `<div class="alert" style="margin-top:12px"><div class="h">✎ Plan adjusted: ${esc(h.summary || 'change applied')}</div><div class="small muted">${esc(new Date(h.at).toLocaleString())} · ${h.changes.length} session${h.changes.length === 1 ? '' : 's'} · <a href="#/coach">review or undo in AI Coach</a></div></div>`).join('')}
+      ${recentChanges.map((h) => `<div class="alert" style="margin-top:12px"><div class="h">✎ Plan adjusted: ${esc(h.summary || 'change applied')}</div><div class="small muted">${esc(new Date(h.at).toLocaleString())} · ${h.changes.length} session${h.changes.length === 1 ? '' : 's'} · ${h.changes[0] ? `<a href="#/session/${encodeURIComponent(h.changes[0].workoutId)}">review or undo on the workout page</a>` : ''}</div></div>`).join('')}
       ${alerts.length ? `<div class="stack" style="margin-top:14px">${alerts.map((c) => `<div class="alert ${c.level}"><div class="h">${esc(c.title)}</div><div class="small">${esc(c.observation)} ${esc(c.suggestion)}</div></div>`).join('')}<a class="small" href="#/reviews">All coaching notes →</a></div>` : ''}
     </div>
     ${faithCard(day.bible, { compact: true })}
