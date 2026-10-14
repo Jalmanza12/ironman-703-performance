@@ -18,7 +18,6 @@ const views = {
   profile: (await import('../js/ui/profile.js')).profileView,
   more: (await import('../js/ui/more.js')).moreView,
   method: (await import('../js/ui/more.js')).methodView,
-  coach: (await import('../js/ui/coach.js')).coachView,
 };
 const plan = buildPlan();
 function ctxFor(state, today) {

@@ -147,7 +147,7 @@ export function sessionView(ctx, [id], rerender) {
         update((st) => { delete st.logs[s.id]; st.strength = st.strength.filter((x) => x.sessionId !== s.id); });
         rerender();
       });
-      // Manual moves use the same validated, history-tracked path as the AI Coach.
+      // Manual moves use the validated, history-tracked adjustment path (undoable).
       root.querySelectorAll('[data-move]').forEach((b) => b.addEventListener('click', () => {
         const to = b.dataset.move;
         const st = load();
