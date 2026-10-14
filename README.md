@@ -26,6 +26,7 @@ A personal training and performance platform for **IRONMAN 70.3 Dallas–Little 
 ## Docs
 
 - [`docs/research-and-methodology.md`](docs/research-and-methodology.md) — event verification, sources (with DOIs), key findings, limitations, and how each translates into the plan.
+- [`docs/storage-schema.md`](docs/storage-schema.md) — the `im703:v1` browser-storage format, migration rules, and backup format.
 - [`docs/training-plan.md`](docs/training-plan.md) — the complete day-by-day plan in text (regenerate with `npm run plan:export`).
 
 ## Getting started (athlete)
