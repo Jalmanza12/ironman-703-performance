@@ -16,3 +16,6 @@ _site/
 !.dev.vars.example
 *.pem
 *.key
+
+# Claude Code personal settings
+.claude/settings.local.json
