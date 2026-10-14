@@ -1,6 +1,6 @@
 # Browser storage schema (`im703:v1`)
 
-All athlete data lives in the browser's `localStorage` on one device. Source: `js/store/store.js`. Regression tests: `tests/store.test.js`.
+All athlete data lives in the browser's `localStorage` on one device. Source: `js/store/store.js` (storage) and `js/store/records.js` (change stamps and merging). Regression tests: `tests/store.test.js` and `tests/records.test.js`.
 
 ## Keys
 
@@ -25,9 +25,38 @@ All athlete data lives in the browser's `localStorage` on one device. Source: `j
 | `changeHistory` | array | `{id, at, source, summary, changes[{workoutId, action, before, after, reason}], status}`. Used for undo and as an audit trail. `source` is `manual` (or `ai`/`rules` on changes made before the AI Coach was removed). `status` is `applied` or `undone`. |
 | `predictionHistory` | array | `{date, lo, mid, hi}` in minutes. At most one entry per day. |
 | `settings` | object | `poolUnit` (`yd`/`m`) and `raceChecklist`. |
+| `planVersion` | string \| null | Fingerprint of the generated plan that the session IDs refer to (`buildPlan().version`). It's recorded on each load if it has changed. A test in `tests/plan.test.js` fails if a code change alters it, because existing logs would then attach to different workouts. |
+| `sync` | object | `{schema, stamps, tombstones}`: when each record last changed or was deleted on this device (see below). Not athlete data. |
 | `coach` | object (legacy) | **No longer created.** The removed AI Coach's chat history. It's kept untouched if present, so no data is lost. |
 
 The training plan itself is **not stored**. It's generated from code (`js/plan/`) on every load, and the athlete's changes are applied on top through `reschedules`, `overrides` and `changeHistory` (see `js/lib/adjustments.js`).
+
+## Records and change stamps
+
+For change tracking and merging, the state is viewed as **records**, each with a key:
+
+| Key | Example |
+| --- | --- |
+| `logs/<sessionId>`, `daily/<date>`, `reschedules/<sessionId>`, `overrides/<sessionId>` | `logs/2026-10-13#1` |
+| `benchmarks/<id>`, `strength/<id>`, `changeHistory/<id>`, `predictionHistory/<date>` | `benchmarks/k3x9…` |
+| `profile/<field>`, `settings/<field>` | `profile/weightLb` |
+| `root/<key>` for any other top-level key, including legacy `coach` | `root/coach` |
+
+- **Stamping:**
+  - `save()` compares each record with the last load or save and puts the time in `sync.stamps[key]` for every record that changed.
+  - A record that disappeared gets `sync.tombstones[key]` instead.
+  - Unchanged records are never re-stamped.
+- **Restores aren't edits:** JSON import and "erase everything" replace the state **without** stamping. A restored old backup can never look newer than edits made on another device.
+- **Older data:** data saved before stamping existed has no stamps and counts as oldest.
+- **Merging two copies** (`mergeStates(local, remote)`, which is pure and not yet wired to any backend):
+  - The newest stamp wins for each record.
+  - A deletion wins only if it is newer than the other side's edit.
+  - Records only one side has are kept.
+  - Exact ties are broken the same way on every device, and merging is commutative and idempotent.
+  - Data from a newer schema version is refused.
+  - The report lists conflicts, deletions, and a `planMismatch` flag.
+  - Known limit: a plan change and its history entry are separate records. In a rare two-device conflict, the newest of each wins independently.
+- **Multiple tabs:** when another tab saves, this tab drops its cached copy (a `storage` event) and re-renders, unless a form is focused. The next save then builds on the latest data instead of overwriting it.
 
 ## Loading and migration rules (`migrate`)
 
@@ -35,7 +64,8 @@ The training plan itself is **not stored**. It's generated from code (`js/plan/`
 - Saved fields are laid over the defaults (`{...emptyState(), ...saved}`), so fields added later get their defaults.
 - **Unknown or legacy keys are preserved.** Nothing is deleted on load.
 - Collections with the wrong type are reset to their default: arrays `benchmarks`, `strength`, `predictionHistory`, `changeHistory`; objects `profile`, `logs`, `daily`, `reschedules`, `overrides`, `settings`.
-- `load()` never writes. If the saved JSON is corrupt, the app starts empty in memory and leaves the raw value in storage, so it can still be recovered.
+- `migrate` repairs a missing or malformed `sync` block without touching data.
+- `load()` never writes. Building the page context records `planVersion` once when it changes. If the saved JSON is corrupt, the app starts empty in memory and leaves the raw value in storage, so it can still be recovered.
 
 ## Backup format (JSON export/import)
 

@@ -128,3 +128,47 @@ test('JSON import: invalid or foreign files are rejected and saved data is untou
   assert.throws(() => importJSON('null'), /not a backup from this app/);
   assert.equal(data.get(KEY), saved);
 });
+
+test('save: stamps only records changed since load; load itself never stamps', async () => {
+  const data = stubStorage({ [KEY]: JSON.stringify(LEGACY_V1) });
+  const { load, update } = await freshStore();
+  assert.deepEqual(load().sync.stamps, {});
+  update((s) => { s.logs['2026-10-06#0'].actual.rpe = 5; s.daily['2026-10-07'] = { sleepH: 6 }; delete s.reschedules['2026-10-08#0']; });
+  const saved = JSON.parse(data.get(KEY));
+  assert.deepEqual(Object.keys(saved.sync.stamps).sort(), ['daily/2026-10-07', 'logs/2026-10-06#0']);
+  assert.deepEqual(Object.keys(saved.sync.tombstones), ['reschedules/2026-10-08#0']);
+  update(() => {}); // no-op save stamps nothing new
+  assert.deepEqual(JSON.parse(data.get(KEY)).sync, saved.sync);
+});
+
+test('import and reset replace data without stamping (restores never look like new edits)', async () => {
+  stubStorage();
+  const { importJSON, resetAll, load } = await freshStore();
+  const s = importJSON(JSON.stringify({ app: 'ironman-703-performance', ...LEGACY_V1 }));
+  assert.deepEqual(s.sync.stamps, {});
+  resetAll();
+  assert.deepEqual(load().sync, { schema: 1, stamps: {}, tombstones: {} });
+});
+
+test('reloadFromStorage: picks up another tab\'s save so this tab does not overwrite it', async () => {
+  const data = stubStorage({ [KEY]: JSON.stringify(LEGACY_V1) });
+  const { load, update, reloadFromStorage } = await freshStore();
+  load();
+  const other = JSON.parse(data.get(KEY));
+  other.daily['2026-10-09'] = { sleepH: 9 }; // written by another tab
+  data.set(KEY, JSON.stringify(other));
+  reloadFromStorage();
+  update((s) => { s.logs['2026-10-09#0'] = { status: 'completed', actual: {} }; });
+  const saved = JSON.parse(data.get(KEY));
+  assert.ok(saved.daily['2026-10-09'] && saved.logs['2026-10-09#0']);
+  assert.deepEqual(Object.keys(saved.sync.stamps), ['logs/2026-10-09#0']);
+});
+
+test('migrate: repairs a malformed sync block without touching data', async () => {
+  const { migrate } = await freshStore();
+  for (const sync of [null, [], 'x', { stamps: [], tombstones: 'y' }]) {
+    const s = migrate({ ...structuredClone(LEGACY_V1), sync });
+    assert.deepEqual(s.sync, { schema: 1, stamps: {}, tombstones: {} });
+    assert.deepEqual(s.logs, LEGACY_V1.logs);
+  }
+});

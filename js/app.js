@@ -1,9 +1,9 @@
 // App shell: builds context (plan, saved state, benchmarks, prediction) and routes views.
 
-import { update } from './store/store.js';
+import { update, reloadFromStorage, STORAGE_KEY } from './store/store.js';
 import { context } from './context.js';
 import { bindTooltips } from './ui/charts.js';
-import { esc } from './ui/h.js';
+import { esc, toast } from './ui/h.js';
 
 import { dashboardView } from './ui/dashboard.js';
 import { dayView } from './ui/day.js';
@@ -61,6 +61,14 @@ window.addEventListener('hashchange', () => {
   render();
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
   document.getElementById('main')?.focus({ preventScroll: true });
+});
+// Another tab saved: drop the cached copy so this tab never overwrites newer data.
+// Re-render unless the athlete is mid-form here (their typing would be lost).
+window.addEventListener('storage', (e) => {
+  if (e.key !== STORAGE_KEY && e.key !== null) return;
+  reloadFromStorage();
+  if (document.activeElement?.closest('form')) toast('Your data changed in another tab. Saving here keeps both changes.');
+  else render();
 });
 render();
 // Keep the countdown live without re-rendering the page.

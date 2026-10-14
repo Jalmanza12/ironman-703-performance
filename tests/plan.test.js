@@ -100,3 +100,10 @@ test('rescheduling respects recovery', () => {
   assert.ok(!opts.includes('2026-11-09')); // Monday rest
   assert.ok(!opts.includes('2026-11-12')); // Thursday already hard
 });
+
+// Saved logs, check-ins and plan changes are keyed by session id ("YYYY-MM-DD#n"). If this fails,
+// a plan edit changed which workout an id points to: existing athlete data would attach to the
+// wrong session. Only update the expected value after confirming that is intended.
+test('plan fingerprint is stable (session ids keep their meaning)', () => {
+  assert.equal(buildPlan().version, 'e2db2f8a');
+});
