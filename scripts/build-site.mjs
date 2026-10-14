@@ -15,8 +15,8 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 for (const p of ['index.html', 'css', 'js', 'assets', '.nojekyll']) cpSync(join(root, p), join(out, p), { recursive: true });
 
-// Relative module specifiers in static import/export statements.
-const SPEC = /(\b(?:import|export)\b[^'"]*?\bfrom\s*|\bimport\s*)(['"])(\.{1,2}\/[^'"?]+\.js)\2/g;
+// Relative module specifiers in static import/export statements and dynamic import('…').
+const SPEC = /(\b(?:import|export)\b[^'"]*?\bfrom\s*|\bimport\s*\(?\s*)(['"])(\.{1,2}\/[^'"?]+\.js)\2/g;
 let files = 0;
 let rewrites = 0;
 function walk(dir) {

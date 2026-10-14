@@ -21,11 +21,13 @@ A personal training and performance platform for **IRONMAN 70.3 Dallas–Little 
 | **Race-day mode** | Phone-friendly splits, pacing bands, fueling schedule, checklists, reminders, race-day passage. |
 | **Fuel** | Daily carbohydrate/protein by day type, session fueling, sweat-rate calculator, weight trend, body-composition guidance. |
 | **Reviews** | Weekly reviews and 4-week block reviews generated from your logs. |
+| **Cloud backup (optional)** | Sign in with an emailed link, then back up or restore your data across devices. Merging is record by record, and you can undo the last sync. Browser storage stays the main copy; see [`docs/cloud-backup.md`](docs/cloud-backup.md). |
 | **Faith** | A unique passage every day (161 passages, Old and New Testament) with summary, reflection tied to that day's training, and a question or intention. |
 
 ## Docs
 
 - [`docs/research-and-methodology.md`](docs/research-and-methodology.md) — event verification, sources (with DOIs), key findings, limitations, and how each translates into the plan.
+- [`docs/cloud-backup.md`](docs/cloud-backup.md): optional cloud backup, including how it works, security, and operations.
 - [`docs/storage-schema.md`](docs/storage-schema.md) — the `im703:v1` browser-storage format, migration rules, and backup format.
 - [`docs/training-plan.md`](docs/training-plan.md) — the complete day-by-day plan in text (regenerate with `npm run plan:export`).
 
@@ -38,9 +40,9 @@ A personal training and performance platform for **IRONMAN 70.3 Dallas–Little 
 
 ## Data & privacy
 
-- Data lives **only in your browser** (`localStorage`) on the device you use. Nothing is sent anywhere; the public repository contains no personal training data, keys, or credentials.
+- Data lives in your browser (`localStorage`) on the device you use. Nothing is sent anywhere unless you sign in to **Cloud backup** and press Back up or Restore. The public repository contains no personal training data or secret keys; the Supabase *publishable* keys in `js/data/cloudConfig.js` are meant to be public.
 - Limitations: no automatic sync between devices; private browsing or clearing site data erases it. Use **Export JSON** / **Import JSON** to move between phone and laptop, and CSV exports for spreadsheets.
-- Cross-device sync would require an authenticated backend (e.g., Supabase or Firebase with per-user access rules). It is intentionally not included so no service or credentials are needed.
+- Cross-device: use the optional **Cloud backup** (Supabase, row-level security, manual backup and restore with merging), or move a JSON backup by hand.
 
 ## Development
 

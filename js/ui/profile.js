@@ -6,6 +6,7 @@ import { powerZones, hrZones, runPaceZones, swimZones, maf180 } from '../lib/zon
 import { isISODate, formatShort } from '../lib/dates.js';
 import { benchmarkTrend } from '../lib/benchmarks.js';
 import { DAYS } from '../lib/adjustments.js';
+import { cloudCardHTML, mountCloudCard } from './cloudCard.js';
 
 const DAY_LABEL = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
 
@@ -113,8 +114,9 @@ export function profileView(ctx, _p, rerender) {
         ${maf ? `<p class="small muted" style="margin-top:8px">Maffetone 180-formula cross-check: ~${maf} bpm. Shown for reference only — your Z2 ceiling comes from measured LTHR, which is more individual.</p>` : ''}</div>
     </div>
     <div class="card span-all"><h2>Benchmark history</h2>${hist.length ? `<div class="table-wrap"><table class="ex"><thead><tr><th>Date</th><th>Type</th><th>Value</th><th>Method</th><th>Trend</th><th></th></tr></thead><tbody>${hist.map((b) => { const tr = benchmarkTrend(ctx.history, b.type); return `<tr><td>${esc(formatShort(b.date))}</td><td>${esc(BENCHMARK_TYPES[b.type]?.label || b.type)}</td><td>${esc(fmtBM(b.type, b.value))}</td><td class="small">${esc(b.method || '')}</td><td class="small">${tr && ctx.history[b.type]?.at(-1) === b ? `${esc(tr.direction)}${tr.meaningful ? ` (${tr.pct > 0 ? '+' : ''}${tr.pct.toFixed(1)}%)${tr.confirmed ? ', confirmed' : ', confirm with next test'}` : ' (within test noise)'}` : ''}</td><td><button class="btn sm danger" data-del="${esc(b.id)}" aria-label="Delete">✕</button></td></tr>`; }).join('')}</tbody></table></div>` : `<p>${NE}</p><p class="small muted">Baseline tests are scheduled Oct 27 (FTP), Oct 28 (CSS) and Nov 1 (run) — ≥3 weeks after Waco.</p>`}</div>
+    ${cloudCardHTML}
     <div class="card span-all" id="data"><h2>Data, backup & privacy</h2>
-      <p class="small text-2">Your data is stored only in this browser (localStorage) on this device — ${isPersistent() ? 'storage is working' : '<b>storage is NOT available (private mode?) — data will be lost when you close the tab</b>'}. Nothing is sent to any server, and nothing private is in the public source code. Limitations: no automatic sync between phone and laptop; clearing browser data deletes it. <b>Export a JSON backup weekly</b> and import it on another device to move your data.</p>
+      <p class="small text-2">Your data is stored only in this browser (localStorage) on this device — ${isPersistent() ? 'storage is working' : '<b>storage is NOT available (private mode?) — data will be lost when you close the tab</b>'}. Nothing is sent to any server unless you use <b>Cloud backup</b> above, and nothing private is in the public source code. Clearing browser data deletes it, so <b>back up</b> (cloud or JSON export) regularly; a JSON backup can also be imported on another device.</p>
       <div class="row"><button class="btn primary" data-exp="json">Export JSON backup</button><button class="btn" data-exp="logs">Workouts CSV</button><button class="btn" data-exp="daily">Check-ins CSV</button><button class="btn" data-exp="bm">Benchmarks CSV</button><button class="btn" data-exp="str">Strength CSV</button>
       <label class="btn">Import JSON<input type="file" accept="application/json,.json" id="imp" hidden></label><button class="btn danger" id="reset">Erase all data</button></div>
     </div>
@@ -188,6 +190,7 @@ export function profileView(ctx, _p, rerender) {
         resetAll();
         rerender();
       });
+      mountCloudCard(root, rerender);
     },
   };
 }

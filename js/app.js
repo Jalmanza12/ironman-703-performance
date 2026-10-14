@@ -71,6 +71,14 @@ window.addEventListener('storage', (e) => {
   else render();
 });
 render();
+// Returning from an emailed sign-in link (?code=…): finish it, then show Profile → Cloud backup.
+if (/[?&](code|error_description)=/.test(location.search)) {
+  import('./store/cloud.js')
+    .then((cloud) => cloud.completeSignInFromUrl())
+    .then((user) => { if (user) toast('Signed in. You can back up or restore under Cloud backup.'); })
+    .catch((e) => toast(`Sign-in failed: ${e.message}`))
+    .finally(() => { if (location.hash !== '#/profile') location.hash = '#/profile'; else render(); });
+}
 // Keep the countdown live without re-rendering the page.
 setInterval(() => document.dispatchEvent(new CustomEvent('tick')), 1000);
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
