@@ -107,3 +107,16 @@ test('rescheduling respects recovery', () => {
 test('plan fingerprint is stable (session ids keep their meaning)', () => {
   assert.equal(buildPlan().version, 'e2db2f8a');
 });
+
+test('build-site versions static and dynamic relative imports', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../scripts/build-site.mjs', import.meta.url), 'utf8');
+  const SPEC = new RegExp(src.match(/const SPEC = \/(.+)\/g;/)[1], 'g');
+  const code = "import { a } from './a.js';\nexport { b } from '../b.js';\nconst m = () => import('../store/cloud.js');\nimport './side.js';\nfetch('https://x.test/y.js');";
+  const out = code.replace(SPEC, (_m, pre, q, spec) => `${pre}${q}${spec}?v=1${q}`);
+  assert.match(out, /'\.\/a\.js\?v=1'/);
+  assert.match(out, /'\.\.\/b\.js\?v=1'/);
+  assert.match(out, /import\('\.\.\/store\/cloud\.js\?v=1'\)/);
+  assert.match(out, /'\.\/side\.js\?v=1'/);
+  assert.match(out, /'https:\/\/x\.test\/y\.js'\)/);
+});

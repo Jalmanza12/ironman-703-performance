@@ -74,6 +74,11 @@ function replace(state) {
   return write(state);
 }
 
+/** Replace all data with an already-resolved state (cloud restore/merge) — no change stamps. */
+export function replaceState(state) {
+  return replace(migrate(state));
+}
+
 /** Drop the cached state and re-read storage (another tab saved). */
 export function reloadFromStorage() {
   memory = null;

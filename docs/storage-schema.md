@@ -7,6 +7,9 @@ All athlete data lives in the browser's `localStorage` on one device. Source: `j
 | `localStorage` key | Contents |
 | --- | --- |
 | `im703:v1` | The whole app state, as one JSON object (below). |
+| `im703:cloud` | Cloud backup only: `{userId, rev, syncedAt}`, i.e. what this browser last synced (see `docs/cloud-backup.md`). |
+| `im703:v1:pre-sync` | Cloud backup only: `{savedAt, reason, state}`, a copy of the data taken before the last backup or restore. Used by **Undo last sync**. |
+| `sb-<project>-auth-token` | Supabase sign-in session, written by the Supabase client. |
 | `im703:coach-conn` | **Obsolete.** Left by the removed AI Coach: a backend URL and an access code. The app no longer reads it. It's safe to delete with browser site-data tools. |
 
 ## State object (`SCHEMA_VERSION = 1`)

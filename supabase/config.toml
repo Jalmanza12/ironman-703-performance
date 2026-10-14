@@ -413,3 +413,37 @@ enabled = true
 # formatted with uppercase keywords, indent 2, max width 180, trailing commas,
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+
+# Hosted projects: only these auth URL settings differ from the local defaults above.
+[remotes.staging]
+project_id = "zpalawbmldmejyuqpozs"
+
+[remotes.staging.auth]
+site_url = "https://jalmanza12.github.io/ironman-703-performance/"
+additional_redirect_urls = ["https://jalmanza12.github.io/ironman-703-performance/**", "http://localhost:8080/**"]
+
+# Keep the hosted project's existing security settings (local defaults above are for local dev only).
+[remotes.staging.auth.email]
+enable_confirmations = true
+max_frequency = "1m0s"
+otp_length = 8
+
+[remotes.staging.auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[remotes.production]
+project_id = "nqferhukatkzcyaokzrp"
+
+[remotes.production.auth]
+site_url = "https://jalmanza12.github.io/ironman-703-performance/"
+additional_redirect_urls = ["https://jalmanza12.github.io/ironman-703-performance/**", "http://localhost:8080/**"]
+
+[remotes.production.auth.email]
+enable_confirmations = true
+max_frequency = "1m0s"
+otp_length = 8
+
+[remotes.production.auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
